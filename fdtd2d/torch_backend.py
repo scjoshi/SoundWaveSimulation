@@ -259,6 +259,8 @@ class TorchFDTD2D:
         self.source_col = int(col)
 
     def _step(self, value, add_source):
+        if self.compiled and hasattr(torch.compiler, "cudagraph_mark_step_begin"):
+            torch.compiler.cudagraph_mark_step_begin()
         self.u_old, self.u = self._advance(
             self.u_old,
             self.u,
@@ -280,6 +282,9 @@ class TorchFDTD2D:
             self.corner_ky,
             self.dt2,
         )
+        if self.compiled:
+            self.u_old = self.u_old.clone()
+            self.u = self.u.clone()
         return self.u
 
     def inject_and_step(self, value):
@@ -331,8 +336,11 @@ def simulate_shot(
     )
     snapshots = []
     zero = torch.zeros((), device=solver.model.device, dtype=solver.model.dtype)
+    has_mark_step = hasattr(torch, "compiler") and hasattr(torch.compiler, "cudagraph_mark_step_begin")
     with torch.inference_mode():
         for step in range(n_steps):
+            if solver.compiled and has_mark_step:
+                torch.compiler.cudagraph_mark_step_begin()
             if step < pulse.numel():
                 field = solver.inject_and_step(pulse[step])
             else:

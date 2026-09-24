@@ -36,6 +36,7 @@ This is an educational model, not a validated ultrasound imaging chain.
 """
 
 import argparse
+import time
 from pathlib import Path
 
 import numpy as np
@@ -217,6 +218,7 @@ def print_results(
     execution_device="CPU",
     dtype_name="float32",
     compiled=False,
+    simulation_time=None,
 ):
     opposite = (tx + array.n_elements // 2) % array.n_elements
     peak_rx = np.max(np.abs(np.delete(traces, tx, axis=0)))
@@ -259,6 +261,8 @@ def print_results(
     print(f"  CFL:                             {solver.cfl:.3f}")
     print(f"  Time steps:                      {n_steps}")
     print(f"  Chirp samples:                   {pulse.size}")
+    if simulation_time is not None:
+        print(f"  Simulation time:                 {simulation_time:.3f} s")
     print(f"  Peak received amplitude:         {peak_rx:.4g}")
     print(f"  Opposite-element peak time:      {1e6 * arrival:.2f} µs")
     print(f"  Geometric diameter travel time:  {1e6 * expected:.2f} µs")
@@ -379,6 +383,7 @@ def main():
     snapshot_stride = SNAPSHOT_STRIDE if args.animate and not args.no_show else 0
 
     source_row, source_col = array.inject_rows_cols(tx)
+    t0 = time.perf_counter()
     traces_device, snapshots = simulate_shot(
         solver,
         sampler,
@@ -390,6 +395,7 @@ def main():
     )
     if device.type == "cuda":
         torch.cuda.synchronize(device)
+    simulation_time = time.perf_counter() - t0
     traces = traces_device.detach().cpu().numpy()
     final_field = solver.u.detach().cpu().numpy()
     pulse = pulse_device.detach().cpu().numpy()
@@ -409,6 +415,7 @@ def main():
         execution_device=execution_device,
         dtype_name=args.dtype,
         compiled=compile_step,
+        simulation_time=simulation_time,
     )
 
     if args.save_traces:
