@@ -1,0 +1,13 @@
+\BOOKMARK [1][-]{section.1}{Objective and Scope}{}% 1
+\BOOKMARK [1][-]{section.2}{Fixed Acquisition Geometry}{}% 2
+\BOOKMARK [1][-]{section.3}{Full-Ring Forward Acquisition}{}% 3
+\BOOKMARK [1][-]{section.4}{Dataset Contract and Storage}{}% 4
+\BOOKMARK [1][-]{section.5}{Pulse and Waveform Representation}{}% 5
+\BOOKMARK [1][-]{section.6}{TFNO Reconstruction Architecture}{}% 6
+\BOOKMARK [1][-]{section.7}{Output Parameterization}{}% 7
+\BOOKMARK [1][-]{section.8}{Training Objective}{}% 8
+\BOOKMARK [1][-]{section.9}{Physically Valid Augmentation}{}% 9
+\BOOKMARK [1][-]{section.10}{Evaluation}{}% 10
+\BOOKMARK [1][-]{section.11}{Proposed Software Structure}{}% 11
+\BOOKMARK [1][-]{section.12}{Implementation Sequence}{}% 12
+\BOOKMARK [1][-]{section.13}{Acceptance Criteria}{}% 13

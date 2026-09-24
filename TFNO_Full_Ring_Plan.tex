@@ -1,0 +1,390 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{hyperref}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!60!black,
+  citecolor=blue!60!black,
+  urlcolor=blue!60!black
+}
+
+\setlist[itemize]{leftmargin=1.5em}
+\setlist[enumerate]{leftmargin=1.7em}
+
+\title{Plan for Full-Ring Ultrasound Speed-of-Sound Reconstruction\\
+Using a Tensorized Fourier Neural Operator}
+\author{}
+\date{September 2026}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This document describes a staged plan for training a Tensorized Fourier
+Neural Operator (TFNO) to estimate a two-dimensional speed-of-sound field from
+a complete circular ultrasound acquisition. Each example contains a known
+transmit pulse, measurements from 256 transmitters and 256 receivers, and a
+$512\times512$ target speed-of-sound image. The plan covers acquisition
+geometry, full-wave simulation, storage, signal representation, network
+architecture, training, validation, and software organization. Only the
+recommended full-ring acquisition is considered.
+\end{abstract}
+
+\section{Objective and Scope}
+
+The objective is to learn the nonlinear inverse operator
+\begin{equation}
+  \mathcal{G}^{-1}:\{s(t),d(\theta_{\mathrm{tx}},
+  \theta_{\mathrm{rx}},t)\}\longmapsto c(x,y),
+\end{equation}
+where $s(t)$ is the transmitted pulse, $d$ is the measured pressure, and
+$c(x,y)$ is the spatial speed of sound. The acquisition contains 256 transmit
+events, with all 256 elements recording each event. Therefore, one unprocessed
+measurement has the form
+\begin{equation}
+  d\in\mathbb{R}^{256\times256\times T},
+\end{equation}
+and the reconstruction target is
+\begin{equation}
+  c\in\mathbb{R}^{512\times512}.
+\end{equation}
+
+The proposed method follows the neural-operator formulation demonstrated for
+ultrasound tomography by Dai et al.~\cite{dai2023}, while extending it from a
+time-of-flight field to multi-frequency full-wave information and from 128 to
+256 ring elements. Fourier neural operators learn maps between functions by
+parameterizing integral kernels in Fourier space~\cite{li2021,kovachki2023}.
+Tensorization reduces the number of spectral parameters and is available in
+the official NeuralOperator implementation~\cite{kossaifi2024}.
+
+\section{Fixed Acquisition Geometry}
+
+All training, validation, test, and inference examples shall use one fixed
+physical geometry. This is essential because changing the ring radius or grid
+spacing changes the inverse operator that the network must learn.
+
+The initial geometry will use:
+\begin{itemize}
+  \item a $512\times512$ Cartesian computational grid;
+  \item isotropic spacing of approximately $1\,\mathrm{mm}$;
+  \item a fixed ring radius of approximately $230\,\mathrm{mm}$;
+  \item 256 equally spaced transmit-receive elements;
+  \item water coupling outside the body;
+  \item fixed element numbering and angular origin;
+  \item a fixed recording interval and number of temporal samples.
+\end{itemize}
+
+Each CT-derived medium will be centered and padded into this common field of
+view. It may be downsampled when necessary, but it will not be independently
+rescaled to a different ring geometry. An image that cannot fit inside the
+fixed ring will be rejected or handled by a single documented preprocessing
+rule that is applied to the entire dataset.
+
+\section{Full-Ring Forward Acquisition}
+
+A new full-ring acquisition routine will wrap the existing
+\texttt{simulate\_shot} function. For transmitter index $i$, the simulator
+returns
+\begin{equation}
+  d_i(j,n),\qquad j=0,\ldots,255,
+  \quad n=0,\ldots,T-1.
+\end{equation}
+Repeating this for all transmitters produces the complete tensor
+\begin{equation}
+  d(i,j,n)\in\mathbb{R}^{256\times256\times T}.
+\end{equation}
+
+The acquisition implementation will:
+\begin{itemize}
+  \item reset the wave solver before every transmit event;
+  \item retain the transmitter self-channel but provide a validity mask;
+  \item save transmitter and receiver coordinates, $\Delta t$, grid spacing,
+        ring radius, pulse, and simulation configuration;
+  \item support restart at the transmitter level after interruption;
+  \item write samples incrementally rather than holding an entire dataset in
+        memory;
+  \item test acoustic reciprocity,
+        $d_{ij}(t)\approx d_{ji}(t)$, as a simulation quality check.
+\end{itemize}
+
+Independent subjects or CT slices can be generated in parallel. Writes to a
+single sample should remain serialized to avoid corrupting the dataset.
+
+\section{Dataset Contract and Storage}
+
+Each dataset sample will contain the following arrays and metadata:
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Field & Shape & Description \\
+\midrule
+\texttt{pulse} & $(T)$ & transmitted pressure waveform \\
+\texttt{traces} & $(256,256,T)$ & full transmitter-receiver data \\
+\texttt{sound\_speed} & $(512,512)$ & target $c(x,y)$ in $\mathrm{m/s}$ \\
+\texttt{slowness\_squared} & $(512,512)$ & target $m=1/c^2$ \\
+\texttt{ring\_mask} & $(512,512)$ & known reconstruction support \\
+\texttt{valid\_mask} & $(256,256)$ & usable measurement pairs \\
+\texttt{metadata} & scalar/vector & geometry, timing, and provenance \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Zarr or HDF5 will be used for chunked, compressed, and resumable storage. At
+512 temporal samples, one float16 trace cube requires approximately
+$67\,\mathrm{MB}$ before compression. One thousand examples therefore require
+approximately $67\,\mathrm{GB}$ for traces alone. Raw traces will be retained
+as archival data, while compact frequency-domain features will be used during
+training.
+
+The planned dataset progression is:
+\begin{enumerate}
+  \item 16 examples for end-to-end pipeline testing;
+  \item 200 training, 25 validation, and 25 test examples for a pilot study;
+  \item at least 1000 diverse training examples for the main model.
+\end{enumerate}
+
+All slices from one patient must remain in the same split. The patient split
+will occur before slice selection or augmentation to prevent information
+leakage.
+
+\section{Pulse and Waveform Representation}
+
+Passing all $T$ time samples to a two-dimensional TFNO would be expensive and
+would make storage and training unnecessarily difficult. Instead, the pulse
+and received signals will be transformed into a stabilized complex frequency
+response. For selected frequencies $f_k$,
+\begin{equation}
+  H_{ij}(f_k)=
+  \frac{D_{ij}(f_k)S^*(f_k)}{|S(f_k)|^2+\epsilon},
+\end{equation}
+where $S$ and $D_{ij}$ are the Fourier transforms of the transmitted and
+received signals, respectively. The regularization $\epsilon$ prevents
+division by low pulse energy.
+
+The initial feature configuration will use 16 frequencies in the transmitted
+band, nominally $100$--$250\,\mathrm{kHz}$. The TFNO input will include:
+\begin{itemize}
+  \item real and imaginary parts of $H_{ij}(f_k)$: 32 channels;
+  \item real and imaginary parts of the normalized pulse spectrum, broadcast
+        over the transmitter-receiver grid: 32 channels;
+  \item $\sin\theta_{\mathrm{tx}}$, $\cos\theta_{\mathrm{tx}}$,
+        $\sin\theta_{\mathrm{rx}}$, and $\cos\theta_{\mathrm{rx}}$;
+  \item normalized transmitter-receiver angular separation;
+  \item the measurement validity mask.
+\end{itemize}
+
+The resulting initial tensor has approximately 70 channels:
+\begin{equation}
+  X\in\mathbb{R}^{B\times70\times256\times256}.
+\end{equation}
+This remains a full-waveform approach because complex amplitude and phase are
+retained at multiple frequencies; it is not limited to a picked arrival time.
+
+\section{TFNO Reconstruction Architecture}
+
+The model will contain three modules:
+\begin{enumerate}
+  \item a deterministic pulse-and-trace feature builder;
+  \item a TFNO backbone operating on the periodic transmitter-receiver grid;
+  \item a learned Cartesian decoder producing the physical image grid.
+\end{enumerate}
+
+The pilot TFNO configuration will use:
+\begin{itemize}
+  \item input grid: $256\times256$ transmitter-receiver samples;
+  \item Fourier modes: $32\times32$, with $48\times48$ tested later;
+  \item hidden channels: 32, with 64 tested later;
+  \item four Fourier layers;
+  \item GELU activations;
+  \item Tucker-factorized spectral weights;
+  \item tensor rank between 0.1 and 0.2.
+\end{itemize}
+
+The TFNO produces a latent $256\times256$ field. A residual convolutional
+decoder then changes from the angular transmitter-receiver representation to
+the Cartesian image representation and performs learned $2\times$ upsampling
+to $512\times512$. Keeping this decoder explicit avoids relying on
+library-specific super-resolution behavior.
+
+\section{Output Parameterization}
+
+The network will predict slowness-squared rather than speed directly:
+\begin{equation}
+  m(x,y)=\frac{1}{c(x,y)^2}.
+\end{equation}
+More specifically, it will predict contrast relative to the water background,
+\begin{equation}
+  \delta m(x,y)=m(x,y)-m_{\mathrm{water}}.
+\end{equation}
+The final speed estimate is
+\begin{equation}
+  \widehat{c}(x,y)=\frac{1}{\sqrt{\widehat{m}(x,y)}}.
+\end{equation}
+This parameterization is consistent with the existing adjoint inversion,
+relates naturally to travel time, and allows the output to be bounded to the
+speed range represented in the training data. Pixels outside the known ring
+will be set to coupling-water speed rather than predicted.
+
+\section{Training Objective}
+
+The initial loss will combine physical-value, boundary, and spectral terms:
+\begin{equation}
+  \mathcal{L}=
+  \lambda_m\mathcal{L}_{\mathrm{Huber}}(m,\widehat{m})
+  +\lambda_c\lVert c-\widehat{c}\rVert_1
+  +\lambda_g\mathcal{L}_{\mathrm{grad}}
+  +\lambda_f\mathcal{L}_{\mathrm{Fourier}}.
+\end{equation}
+All terms will be masked to the interior of the ring. Tissue-balanced weights
+will prevent the large water and soft-tissue regions from overwhelming bone,
+fat, and small anatomical structures. The gradient term will use Sobel
+derivatives, while the Fourier term will compare spatial spectra at low and
+mid frequencies.
+
+Training will begin with AdamW, automatic mixed precision, batch size one or
+two, and gradient accumulation. Tucker factorization reduces parameter memory,
+but activations on a $256\times256$ grid will still dominate GPU use.
+
+\section{Physically Valid Augmentation}
+
+The training pipeline will use transformations that respect the ring
+geometry:
+\begin{itemize}
+  \item joint cyclic shifts of transmitter and receiver indices with the
+        corresponding target-image rotation;
+  \item ring reflections with the correct element-index reversal;
+  \item additive electronic noise;
+  \item receiver gain variation;
+  \item timing jitter;
+  \item random dead channels accompanied by the validity mask;
+  \item moderate pulse-frequency, bandwidth, phase, and amplitude variation.
+\end{itemize}
+Whenever the pulse is varied, the exact pulse remains an input to the model.
+
+\section{Evaluation}
+
+The test set will contain only patients absent from training and validation.
+Reported metrics will include:
+\begin{itemize}
+  \item mean absolute error in $\mathrm{m/s}$ inside the ring;
+  \item relative $L_2$ error;
+  \item structural similarity index;
+  \item spatial-gradient error;
+  \item tissue-specific error for bone, fat, muscle, and visceral tissue;
+  \item robustness to noise, timing jitter, gain error, and missing channels;
+  \item inference time, parameter count, and peak GPU memory.
+\end{itemize}
+
+The principal comparison will be against the existing nonlinear adjoint FWI.
+A homogeneous-water reconstruction and a similarly sized U-Net will serve as
+additional baselines. Ablations will compare full complex frequency features,
+time-of-flight features, and removal of pulse conditioning.
+
+\section{Proposed Software Structure}
+
+\begin{verbatim}
+fdtd2d/
+    acquisition.py          Full 256-by-256 ring acquisition
+
+ring_tfno/
+    config.py               Geometry and model configuration
+    storage.py              Zarr/HDF5 sample format
+    features.py             Pulse/trace FFT and frequency response
+    dataset.py              PyTorch dataset and normalization
+    model.py                TFNO and Cartesian decoder
+    losses.py               Physical and image-space losses
+    metrics.py              Reconstruction metrics
+    checkpoint.py           Reproducible checkpoints
+
+generate_tfno_dataset.py    Generate full-ring examples
+train_tfno.py               Train and validate
+evaluate_tfno.py            Held-out evaluation and comparisons
+infer_tfno.py               Reconstruct one acquisition
+\end{verbatim}
+
+The implementation will use PyTorch and the official
+\texttt{neuraloperator} package, whose TFNO implementation supports Tucker
+factorization and factorized spectral contractions~\cite{kossaifi2024}.
+Dependency versions and the complete training configuration will be saved with
+every checkpoint.
+
+\section{Implementation Sequence}
+
+\begin{enumerate}
+  \item Freeze and test the common $512\times512$ geometry.
+  \item Implement one complete 256-transmitter acquisition.
+  \item Verify dimensions, timing, reciprocity, and signal normalization.
+  \item Define resumable chunked storage and metadata validation.
+  \item Generate the 16-example smoke-test dataset.
+  \item Implement frequency-response feature extraction.
+  \item Implement the TFNO backbone and Cartesian decoder.
+  \item Overfit two examples as a model and loss correctness test.
+  \item Train and evaluate the 200-example pilot dataset.
+  \item Compare the pilot against adjoint FWI and U-Net.
+  \item Scale dataset generation only after the pilot demonstrates learning.
+\end{enumerate}
+
+\section{Acceptance Criteria}
+
+The first acquisition milestone is complete when one sample:
+\begin{itemize}
+  \item contains a finite $(256,256,T)$ trace tensor;
+  \item uses the same geometry as every future sample;
+  \item passes reciprocity and metadata checks;
+  \item can be interrupted and resumed without recomputing finished shots;
+  \item produces deterministic frequency features of the expected shape.
+\end{itemize}
+
+The pilot-model milestone is complete when the model can deliberately overfit
+two examples, trains stably on the pilot split, reconstructs held-out anatomy
+better than homogeneous water, and is evaluated using the same test cases as
+the adjoint FWI baseline.
+
+\begin{thebibliography}{9}
+
+\bibitem{dai2023}
+H.~Dai, M.~Penwarden, R.~M. Kirby, and S.~Joshi,
+``Neural Operator Learning for Ultrasound Tomography Inversion,''
+\emph{Medical Imaging with Deep Learning}, 2023.
+arXiv:2304.03297.
+\url{https://arxiv.org/abs/2304.03297}
+
+\bibitem{li2021}
+Z.~Li, N.~Kovachki, K.~Azizzadenesheli, B.~Liu, K.~Bhattacharya,
+A.~Stuart, and A.~Anandkumar,
+``Fourier Neural Operator for Parametric Partial Differential Equations,''
+\emph{International Conference on Learning Representations}, 2021.
+\url{https://openreview.net/forum?id=c8P9NQVtmnO}
+
+\bibitem{kovachki2023}
+N.~Kovachki, Z.~Li, B.~Liu, K.~Azizzadenesheli, K.~Bhattacharya,
+A.~Stuart, and A.~Anandkumar,
+``Neural Operator: Learning Maps Between Function Spaces with Applications
+to PDEs,'' \emph{Journal of Machine Learning Research}, vol.~24, no.~89,
+pp.~1--97, 2023.
+\url{https://www.jmlr.org/papers/v24/21-1524.html}
+
+\bibitem{kossaifi2024}
+J.~Kossaifi, N.~Kovachki, Z.~Li, D.~Pitt, M.~Liu-Schiaffini,
+R.~J. George, B.~Bonev, K.~Azizzadenesheli, J.~Berner, and A.~Anandkumar,
+``A Library for Learning Neural Operators,'' 2024.
+arXiv:2412.10354.
+\url{https://arxiv.org/abs/2412.10354}
+
+\bibitem{tran2021}
+A.~Tran, A.~Mathews, L.~Xie, and C.~S. Ong,
+``Factorized Fourier Neural Operators,'' 2021.
+arXiv:2111.13802.
+\url{https://arxiv.org/abs/2111.13802}
+
+\end{thebibliography}
+
+\end{document}
