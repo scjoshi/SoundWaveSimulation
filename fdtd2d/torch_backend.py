@@ -155,6 +155,24 @@ class TorchScalarWave2D:
     def c2(self):
         return self._c2
 
+    def set_c(self, c):
+        """Update sound speed in-place so compiled graphs keep stable tensors."""
+        updated = torch.as_tensor(c, device=self.device, dtype=self.dtype)
+        if tuple(updated.shape) != self.shape:
+            raise ValueError(
+                f"Sound speed shape {tuple(updated.shape)} does not match {self.shape}."
+            )
+        if not bool(torch.isfinite(updated).all()) or not bool((updated > 0).all()):
+            raise ValueError("Sound speed must contain finite positive values.")
+        self._c.copy_(updated)
+        self._c2.copy_(updated.square())
+
+    def laplacian(self, field):
+        """Apply the shared GPU Laplacian used by both propagation modes."""
+        return functional.conv2d(
+            field[None, None], self.laplacian_kernel, padding=1
+        )[0, 0]
+
 
 def _advance_field(
     u_old,
@@ -164,7 +182,9 @@ def _advance_field(
     source_value,
     source_row: int,
     source_col: int,
-    add_source: bool,
+    source_field,
+    source_mode: int,
+    adjoint: bool,
     k_left,
     k_right,
     k_bottom,
@@ -178,12 +198,16 @@ def _advance_field(
     dt2: float,
 ):
     """One vectorized leapfrog update, including source and Mur boundaries."""
+    operator_input = c2 * u if adjoint else u
     laplacian = functional.conv2d(
-        u[None, None], kernel, padding=1
+        operator_input[None, None], kernel, padding=1
     )[0, 0]
-    u_next = 2.0 * u - u_old + dt2 * c2 * laplacian
-    if add_source:
+    acceleration = laplacian if adjoint else c2 * laplacian
+    u_next = 2.0 * u - u_old + dt2 * acceleration
+    if source_mode == 1:
         u_next[source_row, source_col] += source_value
+    elif source_mode == 2:
+        u_next += source_field
 
     u_next[1:-1, 0] = u[1:-1, 1] + k_left * (
         u_next[1:-1, 1] - u[1:-1, 0]
@@ -218,23 +242,14 @@ class TorchFDTD2D:
         self.dt2 = self.dt * self.dt
         self.u_old = torch.zeros(model.shape, device=model.device, dtype=model.dtype)
         self.u = torch.zeros_like(self.u_old)
+        self._empty_source = torch.empty(0, device=model.device, dtype=model.dtype)
         self.source_row = 0
         self.source_col = 0
-        c = model.c
-        dt = self.dt
-        dx = model.dx
-        dy = model.dy
-        self.k_left = (c[1:-1, 0] * dt - dx) / (c[1:-1, 0] * dt + dx)
-        self.k_right = (c[1:-1, -1] * dt - dx) / (c[1:-1, -1] * dt + dx)
-        self.k_bottom = (c[0, 1:-1] * dt - dy) / (c[0, 1:-1] * dt + dy)
-        self.k_top = (c[-1, 1:-1] * dt - dy) / (c[-1, 1:-1] * dt + dy)
         self.corner_rows = torch.tensor([0, 0, -1, -1], device=model.device)
         self.corner_cols = torch.tensor([0, -1, 0, -1], device=model.device)
         self.corner_rows_in = torch.tensor([1, 1, -2, -2], device=model.device)
         self.corner_cols_in = torch.tensor([1, -2, 1, -2], device=model.device)
-        corner_c = c[self.corner_rows, self.corner_cols]
-        self.corner_kx = (corner_c * dt - dx) / (corner_c * dt + dx)
-        self.corner_ky = (corner_c * dt - dy) / (corner_c * dt + dy)
+        self._refresh_boundaries()
         if self.cfl >= 1.0:
             raise ValueError(f"Unstable time step: CFL = {self.cfl:.3f} >= 1.")
         self.compiled = bool(compile_step)
@@ -245,6 +260,19 @@ class TorchFDTD2D:
             self._advance = torch.compile(
                 _advance_field, mode="reduce-overhead", fullgraph=True
             )
+
+    def _refresh_boundaries(self):
+        c = self.model.c
+        dt = self.dt
+        dx = self.model.dx
+        dy = self.model.dy
+        self.k_left = (c[1:-1, 0] * dt - dx) / (c[1:-1, 0] * dt + dx)
+        self.k_right = (c[1:-1, -1] * dt - dx) / (c[1:-1, -1] * dt + dx)
+        self.k_bottom = (c[0, 1:-1] * dt - dy) / (c[0, 1:-1] * dt + dy)
+        self.k_top = (c[-1, 1:-1] * dt - dy) / (c[-1, 1:-1] * dt + dy)
+        corner_c = c[self.corner_rows, self.corner_cols]
+        self.corner_kx = (corner_c * dt - dx) / (corner_c * dt + dx)
+        self.corner_ky = (corner_c * dt - dy) / (corner_c * dt + dy)
 
     @property
     def cfl(self):
@@ -258,7 +286,18 @@ class TorchFDTD2D:
         self.source_row = int(row)
         self.source_col = int(col)
 
-    def _step(self, value, add_source):
+    def set_c(self, c):
+        self.model.set_c(c)
+        self._refresh_boundaries()
+        if self.cfl >= 1.0:
+            raise ValueError(f"Updated medium is unstable: CFL = {self.cfl:.3f} >= 1.")
+
+    def reset(self):
+        with torch.inference_mode():
+            self.u_old.zero_()
+            self.u.zero_()
+
+    def _step(self, value, source_field, source_mode, adjoint=False):
         if self.compiled and hasattr(torch.compiler, "cudagraph_mark_step_begin"):
             torch.compiler.cudagraph_mark_step_begin()
         self.u_old, self.u = self._advance(
@@ -269,7 +308,9 @@ class TorchFDTD2D:
             value,
             self.source_row,
             self.source_col,
-            add_source,
+            source_field,
+            source_mode,
+            adjoint,
             self.k_left,
             self.k_right,
             self.k_bottom,
@@ -288,10 +329,19 @@ class TorchFDTD2D:
         return self.u
 
     def inject_and_step(self, value):
-        return self._step(value, True)
+        return self._step(value, self._empty_source, 1, adjoint=False)
 
     def step(self, zero):
-        return self._step(zero, False)
+        return self._step(zero, self._empty_source, 0, adjoint=False)
+
+    def inject_field_and_step(self, source_field, adjoint=True):
+        source_field = torch.as_tensor(
+            source_field, device=self.model.device, dtype=self.model.dtype
+        )
+        if tuple(source_field.shape) != self.model.shape:
+            raise ValueError("Dense source field must match the FDTD grid shape.")
+        zero = torch.zeros((), device=self.model.device, dtype=self.model.dtype)
+        return self._step(zero, source_field, 2, adjoint=adjoint)
 
 
 class TorchRingSampler:
@@ -299,6 +349,7 @@ class TorchRingSampler:
 
     def __init__(self, ring_array, *, device, dtype):
         self.n_elements = ring_array.n_elements
+        self.grid_shape = (ring_array._y_axis.size, ring_array._x_axis.size)
         index_names = ("_row0", "_row1", "_col0", "_col1")
         for name in index_names:
             value = torch.as_tensor(
@@ -317,6 +368,28 @@ class TorchRingSampler:
             + field[self._row1, self._col1] * self._w11
         )
 
+    def record_adjoint(self, residual, out=None):
+        """Scatter receiver residuals; exact transpose of bilinear record."""
+        residual = torch.as_tensor(
+            residual, device=self._w00.device, dtype=self._w00.dtype
+        )
+        if tuple(residual.shape) != (self.n_elements,):
+            raise ValueError(
+                f"Residual shape {tuple(residual.shape)} does not match "
+                f"({self.n_elements},)."
+            )
+        if out is None:
+            out = torch.zeros(
+                self.grid_shape, device=residual.device, dtype=residual.dtype
+            )
+        else:
+            out.zero_()
+        out.index_put_((self._row0, self._col0), residual * self._w00, accumulate=True)
+        out.index_put_((self._row0, self._col1), residual * self._w10, accumulate=True)
+        out.index_put_((self._row1, self._col0), residual * self._w01, accumulate=True)
+        out.index_put_((self._row1, self._col1), residual * self._w11, accumulate=True)
+        return out
+
 
 def simulate_shot(
     solver: TorchFDTD2D,
@@ -328,6 +401,7 @@ def simulate_shot(
     snapshot_stride: int = 0,
 ):
     """Run one shot while retaining fields and traces on the target device."""
+    solver.reset()
     solver.set_source(source_row, source_col)
     traces = torch.empty(
         (sampler.n_elements, n_steps),

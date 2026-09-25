@@ -145,8 +145,28 @@ def animate_field(snapshots, array, tx, x_m, y_m, dt, interval=40, c_map=None):
     return fig
 
 
-def plot_inversion(c_true, c_est, history, x_m, y_m, array, mask=None):
+def plot_inversion(
+    c_true,
+    c_est,
+    history,
+    x_m,
+    y_m,
+    array,
+    mask=None,
+    optimizer="cg",
+):
     """True / reconstructed / difference sound speed and misfit history."""
+    optimizer_labels = {
+        "cg": ("adjoint Polak–Ribière CG", "CG iteration"),
+        "gradient-descent": (
+            "adjoint fixed-step gradient descent",
+            "Gradient-descent iteration",
+        ),
+    }
+    method_title, iteration_label = optimizer_labels.get(
+        optimizer,
+        (str(optimizer).replace("-", " "), "Optimization iteration"),
+    )
     extent = _extent_mm(x_m, y_m)
     vmin = float(min(np.min(c_true), np.min(c_est)))
     vmax = float(max(np.max(c_true), np.max(c_est)))
@@ -160,7 +180,9 @@ def plot_inversion(c_true, c_est, history, x_m, y_m, array, mask=None):
 
     fig, axes = plt.subplots(2, 2, figsize=(12.0, 10.0))
     set_window_title(fig, "Ring FWI")
-    fig.suptitle("Nonlinear FWI  (slowness-squared, adjoint CG)", fontsize=14)
+    fig.suptitle(
+        f"Nonlinear FWI  (slowness-squared, {method_title})", fontsize=14
+    )
 
     panels = (
         (axes[0, 0], c_true, "True $c$ (m/s)", "viridis", vmin, vmax),
@@ -180,7 +202,7 @@ def plot_inversion(c_true, c_est, history, x_m, y_m, array, mask=None):
     ax = axes[1, 1]
     iters = np.arange(misfit.size)
     ax.plot(iters, misfit, "o-", color="tab:blue", lw=1.5)
-    ax.set(title="Waveform misfit", xlabel="CG iteration", ylabel="$J(m)$")
+    ax.set(title="Waveform misfit", xlabel=iteration_label, ylabel="$J(m)$")
     if misfit.size and np.all(misfit > 0.0):
         ax.set_yscale("log")
     ax.grid(alpha=0.3)
