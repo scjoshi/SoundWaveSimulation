@@ -830,7 +830,10 @@ def main():
         args.step_size,
     )
 
-    if not args.no_show or args.save_figure:
+    figure_path = args.save_figure
+    if args.no_show and figure_path is None:
+        figure_path = Path("invert_ring_dashboard.png")
+    if not args.no_show or figure_path:
         figure = plot_inversion(
             c_true,
             c_est,
@@ -841,9 +844,10 @@ def main():
             mask=mask,
             optimizer=args.optimizer,
         )
-        if args.save_figure:
-            args.save_figure.parent.mkdir(parents=True, exist_ok=True)
-            figure.savefig(args.save_figure, dpi=180)
+        if figure_path:
+            figure_path.parent.mkdir(parents=True, exist_ok=True)
+            figure.savefig(figure_path, dpi=180)
+            print(f"Saved inversion dashboard: {figure_path}")
         if not args.no_show:
             plt.show(block=True)
         else:
