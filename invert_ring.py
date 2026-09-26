@@ -99,9 +99,22 @@ def parse_args():
     )
     parser.add_argument(
         "--optimizer",
-        choices=("cg", "gradient-descent"),
-        default="cg",
-        help="Optimization method (default: cg)",
+        choices=("cg", "gradient-descent", "adam"),
+        default="adam",
+        help="Optimization method (default: adam)",
+    )
+    parser.add_argument(
+        "--multiscale",
+        action="store_true",
+        help=(
+            "Use 25–75 kHz / 2 mm, 50–125 kHz / 1 mm, and "
+            "100–250 kHz / 0.5 mm coarse-to-fine stages."
+        ),
+    )
+    parser.add_argument(
+        "--coarse-only",
+        action="store_true",
+        help="Run only the 25–75 kHz, 101 x 101 coarse multiscale stage.",
     )
     parser.add_argument(
         "--step-size",
@@ -109,6 +122,13 @@ def parse_args():
         default=1.0e-15,
         metavar="ALPHA",
         help="Fixed gradient-descent step in slowness-squared units (default: 1e-15)",
+    )
+    parser.add_argument(
+        "--adam-lr",
+        type=float,
+        default=1.0e-9,
+        metavar="ALPHA",
+        help="Adam learning rate in slowness-squared units (default: 1e-9)",
     )
     parser.add_argument(
         "--reg", type=float, default=0.0, metavar="ALPHA",
@@ -560,6 +580,53 @@ def fixed_step_gradient_descent(
     return m, history
 
 
+def adam(
+    m0,
+    misfit_and_grad,
+    project,
+    mask,
+    learning_rate,
+    max_iter=15,
+    beta1=0.9,
+    beta2=0.999,
+    epsilon=1e-30,
+    verbose=True,
+):
+    """Projected Adam for stochastic or deterministic FWI gradients."""
+    m = project(np.asarray(m0, dtype=float))
+    value, gradient = misfit_and_grad(m)
+    first_moment = np.zeros_like(m)
+    second_moment = np.zeros_like(m)
+    history = {
+        "misfit": [float(value)],
+        "step_size": [0.0],
+        "grad_norm": [float(np.linalg.norm(gradient[mask]))],
+    }
+    for iteration in range(1, max_iter + 1):
+        first_moment[mask] = (
+            beta1 * first_moment[mask] + (1.0 - beta1) * gradient[mask]
+        )
+        second_moment[mask] = (
+            beta2 * second_moment[mask] + (1.0 - beta2) * gradient[mask] ** 2
+        )
+        first_hat = first_moment[mask] / (1.0 - beta1**iteration)
+        second_hat = second_moment[mask] / (1.0 - beta2**iteration)
+        update = np.zeros_like(m)
+        update[mask] = learning_rate * first_hat / (np.sqrt(second_hat) + epsilon)
+        m = project(m - update)
+        value, gradient = misfit_and_grad(m)
+        grad_norm = float(np.linalg.norm(gradient[mask]))
+        history["misfit"].append(float(value))
+        history["step_size"].append(float(learning_rate))
+        history["grad_norm"].append(grad_norm)
+        if verbose:
+            print(
+                f"  Adam iter {iteration:3d}  J = {value:.6e}  "
+                f"lr = {learning_rate:.3e}  |g| = {grad_norm:.4e}"
+            )
+    return m, history
+
+
 class IterationVisualizer:
     """Live speed estimate, per-iteration update, and misfit history."""
 
@@ -666,6 +733,8 @@ def print_summary(
     print(f"  Optimizer:                       {optimizer}")
     if optimizer == "gradient-descent":
         print(f"  Fixed step size:                 {step_size:.4g}")
+    elif optimizer == "adam":
+        print(f"  Adam learning rate:              {step_size:.4g}")
     print(f"  Optimization iterations:         {max(len(history['misfit']) - 1, 0)}")
     print(f"  Initial J:                       {history['misfit'][0]:.6e}")
     print(f"  Final J:                         {history['misfit'][-1]:.6e}")
@@ -682,6 +751,118 @@ def print_summary(
               f"c = {C0:.0f}–{C0 + SHEPP_DC:.0f} m/s")
 
 
+def multiscale_stages(enabled):
+    """Return (grid size, spacing, start Hz, end Hz, chirp duration) stages."""
+    if enabled:
+        return (
+            (101, 2.0e-3, 25.0e3, 75.0e3, 80.0e-6),
+            (201, 1.0e-3, 50.0e3, 125.0e3, 40.0e-6),
+            (401, 0.5e-3, F_START_HZ, F_END_HZ, CHIRP_DURATION),
+        )
+    return ((NX, DX, F_START_HZ, F_END_HZ, CHIRP_DURATION),)
+
+
+def resize_slowness(m, shape):
+    """Bicubically transfer slowness-squared to the next grid level."""
+    field = torch.as_tensor(m, dtype=torch.float64)[None, None]
+    resized = torch.nn.functional.interpolate(
+        field, size=shape, mode="bicubic", align_corners=True
+    )
+    return resized[0, 0].numpy()
+
+
+def run_inversion_stage(
+    args, device, dtype, compile_step, grid_size, spacing, f_start, f_end,
+    chirp_duration, initial_m=None,
+):
+    """Generate data and invert one frequency/grid-continuation level."""
+    x_m = axis_centers(grid_size, spacing)
+    y_m = axis_centers(grid_size, spacing)
+    c_true = build_medium(x_m, y_m, phantom=args.phantom)
+    c_ceiling = max(float(c_true.max()), float(args.c_max), C0)
+    dt = stable_dt(c_ceiling, spacing, spacing, cfl=CFL)
+    n_steps = n_steps_for_crossing(RING_RADIUS, float(c_true.min()), dt)
+    pulse = linear_chirp(
+        dt, chirp_duration, f_start, f_end, device=device, dtype=dtype,
+    )
+    n_steps = max(n_steps, pulse.numel() + 1)
+    source_values = torch.zeros(n_steps, device=device, dtype=dtype)
+    source_values[:pulse.numel()].copy_(pulse)
+
+    model = TorchScalarWave2D(c_true, spacing, spacing, device=device, dtype=dtype)
+    solver = TorchFDTD2D(model, dt, compile_step=compile_step)
+    array = RingArray(args.n_elements, RING_RADIUS, x_m, y_m)
+    sampler = TorchRingSampler(array, device=device, dtype=dtype)
+    observed_batch_size = min(args.parallel_shots, args.n_elements)
+    print(
+        "  Precomputing observed traces "
+        f"({observed_batch_size} shots per GPU batch)..."
+    )
+    observed = torch.empty(
+        (args.n_elements, args.n_elements, n_steps), device=device, dtype=dtype
+    )
+    batched_solvers = {}
+    for start in range(0, args.n_elements, observed_batch_size):
+        sources = np.arange(start, min(start + observed_batch_size, args.n_elements))
+        rows_cols = [array.inject_rows_cols(int(tx)) for tx in sources]
+        rows = np.asarray([row for row, _ in rows_cols], dtype=np.int64)
+        cols = np.asarray([col for _, col in rows_cols], dtype=np.int64)
+        batch_size = len(sources)
+        batched = batched_solvers.get(batch_size)
+        if batched is None:
+            batched = TorchFDTD2DBatch(solver, batch_size)
+            batched_solvers[batch_size] = batched
+        traces, _ = simulate_shots_batch(
+            solver, sampler, pulse, rows, cols, n_steps, batched=batched,
+            source_values=source_values,
+        )
+        observed[start:start + batch_size].copy_(traces)
+
+    mask = interior_mask(
+        x_m, y_m, RING_RADIUS, margin_m=args.margin_pixels * spacing,
+        center=array.center,
+    )
+    problem = TorchLeastSquaresFWI(
+        solver, sampler, array, pulse, n_steps, args.n_shots, observed, mask,
+        alpha=args.reg, c_min=args.c_min, c_max=args.c_max, c_background=C0,
+        shot_seed=args.shot_seed, parallel_shots=args.parallel_shots,
+        batched_solvers=batched_solvers,
+    )
+    if initial_m is None:
+        m0 = np.full(c_true.shape, m_from_c(C0))
+    else:
+        m0 = problem.project(resize_slowness(initial_m, c_true.shape))
+
+    visualizer = None
+    if args.show_iterations:
+        visualizer = IterationVisualizer(x_m, y_m, mask, args.c_min, args.c_max)
+
+    def evaluated_objective(m):
+        value, gradient = problem.misfit_and_grad(m)
+        if visualizer is not None:
+            visualizer.update(m, value)
+        return value, gradient
+
+    if args.optimizer == "gradient-descent":
+        m_est, history = fixed_step_gradient_descent(
+            m0, evaluated_objective, problem.project, mask,
+            step_size=args.step_size, max_iter=args.max_iter, verbose=True,
+        )
+    elif args.optimizer == "adam":
+        m_est, history = adam(
+            m0, evaluated_objective, problem.project, mask,
+            learning_rate=args.adam_lr, max_iter=args.max_iter, verbose=True,
+        )
+    else:
+        m_est, history = polak_ribiere(
+            m0, problem.misfit, evaluated_objective, problem.project, mask,
+            max_iter=args.max_iter, verbose=True,
+        )
+    if visualizer is not None:
+        plt.close(visualizer.figure)
+    return c_true, c_from_m(m_est), m_est, mask, history, problem, array, x_m, y_m, dt, n_steps
+
+
 def main():
     args = parse_args()
     if args.n_elements < 2:
@@ -689,10 +870,14 @@ def main():
     validate_shot_count(args.n_elements, args.n_shots)
     if args.parallel_shots < 1:
         raise SystemExit("--parallel-shots must be at least 1.")
+    if args.multiscale and args.coarse_only:
+        raise SystemExit("--multiscale and --coarse-only cannot be combined.")
     if args.max_iter < 1:
         raise SystemExit("--max-iter must be at least 1.")
     if args.step_size <= 0.0:
         raise SystemExit("--step-size must be positive.")
+    if args.adam_lr <= 0.0:
+        raise SystemExit("--adam-lr must be positive.")
     if args.c_min <= 0.0 or args.c_max <= args.c_min:
         raise SystemExit("Need 0 < --c-min < --c-max.")
     if args.margin_pixels < 0:
@@ -720,113 +905,23 @@ def main():
         run_torch_gradient_check(device, dtype, compile_step)
         return
 
-    x_m = axis_centers(NX, DX)
-    y_m = axis_centers(NY, DY)
-    c_true = build_medium(x_m, y_m, phantom=args.phantom)
-    c_ceiling = max(float(c_true.max()), float(args.c_max), C0)
-    dt = stable_dt(c_ceiling, DX, DY, cfl=CFL)
-    n_steps = n_steps_for_crossing(RING_RADIUS, float(c_true.min()), dt)
-    pulse = linear_chirp(
-        dt,
-        CHIRP_DURATION,
-        F_START_HZ,
-        F_END_HZ,
-        device=device,
-        dtype=dtype,
-    )
-    n_steps = max(n_steps, pulse.numel() + 1)
-    source_values = torch.zeros(n_steps, device=device, dtype=dtype)
-    source_values[:pulse.numel()].copy_(pulse)
-
-    model = TorchScalarWave2D(
-        c_true, DX, DY, device=device, dtype=dtype
-    )
-    solver = TorchFDTD2D(model, dt, compile_step=compile_step)
-    array = RingArray(args.n_elements, RING_RADIUS, x_m, y_m)
-    sampler = TorchRingSampler(array, device=device, dtype=dtype)
-
-    observed_batch_size = min(args.parallel_shots, args.n_elements)
-    print(
-        "Precomputing observed traces for every transmitting element "
-        f"({observed_batch_size} shots per GPU batch)..."
-    )
-    observed = torch.empty(
-        (args.n_elements, args.n_elements, n_steps),
-        device=device,
-        dtype=dtype,
-    )
-    observed_solvers = {}
-    progress_stride = max(1, args.n_elements // 8)
-    for start in range(0, args.n_elements, observed_batch_size):
-        sources = np.arange(start, min(start + observed_batch_size, args.n_elements))
-        rows_cols = [array.inject_rows_cols(int(tx)) for tx in sources]
-        rows = np.asarray([row for row, _ in rows_cols], dtype=np.int64)
-        cols = np.asarray([col for _, col in rows_cols], dtype=np.int64)
-        batch_size = len(sources)
-        batched = observed_solvers.get(batch_size)
-        if batched is None:
-            batched = TorchFDTD2DBatch(solver, batch_size)
-            observed_solvers[batch_size] = batched
-        traces, _ = simulate_shots_batch(
-            solver, sampler, pulse, rows, cols, n_steps, batched=batched,
-            source_values=source_values,
+    transferred_m = None
+    stages = multiscale_stages(args.multiscale or args.coarse_only)
+    if args.coarse_only:
+        stages = stages[:1]
+    for stage_index, stage in enumerate(stages, start=1):
+        grid_size, spacing, f_start, f_end, duration = stage
+        print(
+            f"Stage {stage_index}/{len(stages)}: {grid_size} x {grid_size}, "
+            f"{f_start / 1e3:.0f}–{f_end / 1e3:.0f} kHz"
         )
-        observed[start:start + batch_size].copy_(traces)
-        completed = start + batch_size
-        if completed % progress_stride < batch_size or completed == args.n_elements:
-            print(
-                f"  generated {completed:4d}/{args.n_elements} shots; "
-                f"latest peak |p| = {traces.abs().max().item():.4g}"
-            )
-
-    mask = interior_mask(
-        x_m, y_m, RING_RADIUS, margin_m=args.margin_pixels * DX,
-        center=array.center,
-    )
-    problem = TorchLeastSquaresFWI(
-        solver, sampler, array, pulse, n_steps, args.n_shots, observed, mask,
-        alpha=args.reg, c_min=args.c_min, c_max=args.c_max, c_background=C0,
-        shot_seed=args.shot_seed, parallel_shots=args.parallel_shots,
-        batched_solvers=observed_solvers,
-    )
-    m0 = np.full(c_true.shape, m_from_c(C0))
-    visualizer = None
-    if args.show_iterations:
-        visualizer = IterationVisualizer(
-            x_m, y_m, mask, args.c_min, args.c_max
+        (
+            c_true, c_est, transferred_m, mask, history, problem, array,
+            x_m, y_m, dt, n_steps,
+        ) = run_inversion_stage(
+            args, device, dtype, compile_step, grid_size, spacing, f_start,
+            f_end, duration, initial_m=transferred_m,
         )
-
-    def evaluated_objective(m):
-        value, gradient = problem.misfit_and_grad(m)
-        if visualizer is not None:
-            visualizer.update(m, value)
-        return value, gradient
-
-    if args.optimizer == "gradient-descent":
-        print(f"Running fixed-step gradient descent (step={args.step_size:.3e})...")
-        m_est, history = fixed_step_gradient_descent(
-            m0,
-            evaluated_objective,
-            problem.project,
-            mask,
-            step_size=args.step_size,
-            max_iter=args.max_iter,
-            verbose=True,
-        )
-    else:
-        print("Running Polak–Ribière CG...")
-        m_est, history = polak_ribiere(
-            m0,
-            problem.misfit,
-            evaluated_objective,
-            problem.project,
-            mask,
-            max_iter=args.max_iter,
-            verbose=True,
-        )
-    if visualizer is not None:
-        plt.ioff()
-    c_est = c_from_m(m_est)
     print_summary(
         c_true,
         c_est,
@@ -843,7 +938,7 @@ def main():
         args.dtype,
         compile_step,
         args.optimizer,
-        args.step_size,
+        args.adam_lr if args.optimizer == "adam" else args.step_size,
     )
 
     figure_path = args.save_figure

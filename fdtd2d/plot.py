@@ -162,6 +162,7 @@ def plot_inversion(
             "adjoint fixed-step gradient descent",
             "Gradient-descent iteration",
         ),
+        "adam": ("adjoint projected Adam", "Adam iteration"),
     }
     method_title, iteration_label = optimizer_labels.get(
         optimizer,
