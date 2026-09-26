@@ -54,6 +54,7 @@ from fdtd2d.phantoms import SHEPP_DC, shepp_logan_speed
 from fdtd2d.plot import animate_field, plot_dashboard
 from fdtd2d.torch_backend import (
     TorchFDTD2D,
+    TorchFDTD2DBatch,
     TorchRingSampler,
     TorchScalarWave2D,
     configure_runtime,
@@ -61,6 +62,7 @@ from fdtd2d.torch_backend import (
     linear_chirp,
     resolve_device,
     simulate_shot,
+    simulate_shots_batch,
 )
 
 
@@ -157,6 +159,15 @@ def parse_args():
         choices=("auto", "on", "off"),
         default="auto",
         help="Compile the FDTD step; auto enables it on CUDA (default: auto)",
+    )
+    parser.add_argument(
+        "--parallel-shots",
+        type=int,
+        metavar="N",
+        help=(
+            "Run every element as a transmitter, in independent batches of up "
+            "to N shots. Omit to simulate only --tx (default)."
+        ),
     )
     parser.add_argument(
         "--cpu-threads",
@@ -289,6 +300,7 @@ def save_traces(
     device="cpu",
     dtype="float32",
     compiled=False,
+    transmitter_indices=None,
 ):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -307,6 +319,10 @@ def save_traces(
         torch_device=np.asarray(device),
         torch_dtype=np.asarray(dtype),
         torch_compiled=np.asarray(bool(compiled)),
+        transmitter_indices=(
+            np.asarray(transmitter_indices, dtype=int)
+            if transmitter_indices is not None else np.asarray([tx], dtype=int)
+        ),
     )
 
 
@@ -322,6 +338,10 @@ def main():
         raise SystemExit("--ct-padding-speed must be positive.")
     if args.cpu_threads < 0:
         raise SystemExit("--cpu-threads must be zero or positive.")
+    if args.parallel_shots is not None and args.parallel_shots < 1:
+        raise SystemExit("--parallel-shots must be at least 1.")
+    if args.parallel_shots is not None and args.animate:
+        raise SystemExit("--animate is not supported with --parallel-shots.")
     try:
         device = resolve_device(args.device)
         configure_runtime(
@@ -384,27 +404,56 @@ def main():
 
     source_row, source_col = array.inject_rows_cols(tx)
     t0 = time.perf_counter()
-    traces_device, snapshots = simulate_shot(
-        solver,
-        sampler,
-        pulse_device,
-        source_row,
-        source_col,
-        n_steps,
-        snapshot_stride=snapshot_stride,
-    )
+    if args.parallel_shots is None:
+        transmitter_indices = np.asarray([tx], dtype=int)
+        traces_device, snapshots = simulate_shot(
+            solver,
+            sampler,
+            pulse_device,
+            source_row,
+            source_col,
+            n_steps,
+            snapshot_stride=snapshot_stride,
+        )
+        traces = traces_device.detach().cpu().numpy()
+        final_field = solver.u.detach().cpu().numpy()
+    else:
+        transmitter_indices = np.arange(array.n_elements, dtype=int)
+        trace_batches = []
+        batched_solvers = {}
+        final_field = None
+        snapshots = []
+        for start in range(0, array.n_elements, args.parallel_shots):
+            shot_indices = transmitter_indices[start:start + args.parallel_shots]
+            rows_cols = [array.inject_rows_cols(int(index)) for index in shot_indices]
+            rows = np.asarray([row for row, _ in rows_cols], dtype=np.int64)
+            cols = np.asarray([col for _, col in rows_cols], dtype=np.int64)
+            batch_size = shot_indices.size
+            batched_solver = batched_solvers.get(batch_size)
+            if batched_solver is None:
+                batched_solver = TorchFDTD2DBatch(solver, batch_size)
+                batched_solvers[batch_size] = batched_solver
+            traces_batch, fields_batch = simulate_shots_batch(
+                solver, sampler, pulse_device, rows, cols, n_steps,
+                batched=batched_solver,
+            )
+            trace_batches.append(traces_batch.detach().cpu().numpy())
+            tx_position = np.flatnonzero(shot_indices == tx)
+            if tx_position.size:
+                final_field = fields_batch[tx_position[0]].detach().cpu().numpy()
+        traces = np.concatenate(trace_batches, axis=0)
+        if final_field is None:  # Defensive: tx is always an element index.
+            raise RuntimeError("Could not retrieve the requested transmitter field.")
     if device.type == "cuda":
         torch.cuda.synchronize(device)
     simulation_time = time.perf_counter() - t0
-    traces = traces_device.detach().cpu().numpy()
-    final_field = solver.u.detach().cpu().numpy()
     pulse = pulse_device.detach().cpu().numpy()
     time_s = np.arange(n_steps) * dt
     execution_device = device_summary(device)
     print_results(
         array,
         solver,
-        traces,
+        traces if args.parallel_shots is None else traces[tx],
         tx,
         dt,
         n_steps,
@@ -431,6 +480,7 @@ def main():
             device=str(device),
             dtype=args.dtype,
             compiled=compile_step,
+            transmitter_indices=transmitter_indices,
         )
 
     c_plot = c if ct_grid is not None or args.phantom != "none" else None
@@ -446,7 +496,9 @@ def main():
 
     if not args.no_show or args.save_figure:
         figure = plot_dashboard(
-            final_field, traces, time_s, array, pulse, dt, tx, x_m, y_m,
+            final_field,
+            traces if args.parallel_shots is None else traces[tx],
+            time_s, array, pulse, dt, tx, x_m, y_m,
             c_map=c_plot,
         )
         if args.save_figure:

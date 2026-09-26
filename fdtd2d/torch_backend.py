@@ -368,6 +368,46 @@ class TorchRingSampler:
             + field[self._row1, self._col1] * self._w11
         )
 
+    def record_batch(self, fields):
+        """Record every receiver for each field in a ``(shots, ny, nx)`` batch."""
+        if fields.ndim != 3 or tuple(fields.shape[1:]) != self.grid_shape:
+            raise ValueError(
+                "Batched fields must have shape (shots, ny, nx) matching the grid."
+            )
+        return (
+            fields[:, self._row0, self._col0] * self._w00
+            + fields[:, self._row0, self._col1] * self._w10
+            + fields[:, self._row1, self._col0] * self._w01
+            + fields[:, self._row1, self._col1] * self._w11
+        )
+
+    def record_adjoint_batch(self, residual, out=None):
+        """Scatter batched receiver residuals into ``(shots, ny, nx)`` fields."""
+        if residual.ndim != 2 or residual.shape[1] != self.n_elements:
+            raise ValueError("Batched residuals must have shape (shots, receivers).")
+        if out is None:
+            out = torch.zeros(
+                (residual.shape[0], *self.grid_shape),
+                device=residual.device,
+                dtype=residual.dtype,
+            )
+        else:
+            out.zero_()
+        batches = torch.arange(residual.shape[0], device=residual.device)[:, None]
+        batches = batches.expand(-1, self.n_elements)
+        for rows, cols, weights in (
+            (self._row0, self._col0, self._w00),
+            (self._row0, self._col1, self._w10),
+            (self._row1, self._col0, self._w01),
+            (self._row1, self._col1, self._w11),
+        ):
+            out.index_put_(
+                (batches, rows[None], cols[None]),
+                residual * weights,
+                accumulate=True,
+            )
+        return out
+
     def record_adjoint(self, residual, out=None):
         """Scatter receiver residuals; exact transpose of bilinear record."""
         residual = torch.as_tensor(
@@ -423,3 +463,182 @@ def simulate_shot(
             if snapshot_stride and step % snapshot_stride == 0:
                 snapshots.append((field.detach().cpu().numpy().copy(), step))
     return traces, snapshots
+
+
+def _advance_field_batch(
+    u_old,
+    u,
+    c2,
+    kernel,
+    source_value,
+    source_rows,
+    source_cols,
+    batch_indices,
+    k_left,
+    k_right,
+    k_bottom,
+    k_top,
+    corner_rows,
+    corner_cols,
+    corner_rows_in,
+    corner_cols_in,
+    corner_kx,
+    corner_ky,
+    dt2: float,
+):
+    """Advance independent shots stored in the leading batch dimension."""
+    laplacian = functional.conv2d(u[:, None], kernel, padding=1)[:, 0]
+    u_next = 2.0 * u - u_old + dt2 * c2 * laplacian
+    u_next[batch_indices, source_rows, source_cols] += source_value
+
+    u_next[:, 1:-1, 0] = u[:, 1:-1, 1] + k_left * (
+        u_next[:, 1:-1, 1] - u[:, 1:-1, 0]
+    )
+    u_next[:, 1:-1, -1] = u[:, 1:-1, -2] + k_right * (
+        u_next[:, 1:-1, -2] - u[:, 1:-1, -1]
+    )
+    u_next[:, 0, 1:-1] = u[:, 1, 1:-1] + k_bottom * (
+        u_next[:, 1, 1:-1] - u[:, 0, 1:-1]
+    )
+    u_next[:, -1, 1:-1] = u[:, -2, 1:-1] + k_top * (
+        u_next[:, -2, 1:-1] - u[:, -1, 1:-1]
+    )
+
+    corner_u = u[:, corner_rows, corner_cols]
+    from_x = u[:, corner_rows, corner_cols_in] + corner_kx * (
+        u_next[:, corner_rows, corner_cols_in] - corner_u
+    )
+    from_y = u[:, corner_rows_in, corner_cols] + corner_ky * (
+        u_next[:, corner_rows_in, corner_cols] - corner_u
+    )
+    u_next[:, corner_rows, corner_cols] = 0.5 * (from_x + from_y)
+    return u, u_next
+
+
+def _advance_adjoint_field_batch(
+    u_old, u, c2, kernel, source_fields, k_left, k_right, k_bottom, k_top,
+    corner_rows, corner_cols, corner_rows_in, corner_cols_in, corner_kx,
+    corner_ky, dt2: float,
+):
+    """Batched adjoint update with one dense residual source per shot."""
+    laplacian = functional.conv2d((c2 * u)[:, None], kernel, padding=1)[:, 0]
+    u_next = 2.0 * u - u_old + dt2 * laplacian + source_fields
+    u_next[:, 1:-1, 0] = u[:, 1:-1, 1] + k_left * (u_next[:, 1:-1, 1] - u[:, 1:-1, 0])
+    u_next[:, 1:-1, -1] = u[:, 1:-1, -2] + k_right * (u_next[:, 1:-1, -2] - u[:, 1:-1, -1])
+    u_next[:, 0, 1:-1] = u[:, 1, 1:-1] + k_bottom * (u_next[:, 1, 1:-1] - u[:, 0, 1:-1])
+    u_next[:, -1, 1:-1] = u[:, -2, 1:-1] + k_top * (u_next[:, -2, 1:-1] - u[:, -1, 1:-1])
+    corner_u = u[:, corner_rows, corner_cols]
+    from_x = u[:, corner_rows, corner_cols_in] + corner_kx * (u_next[:, corner_rows, corner_cols_in] - corner_u)
+    from_y = u[:, corner_rows_in, corner_cols] + corner_ky * (u_next[:, corner_rows_in, corner_cols] - corner_u)
+    u_next[:, corner_rows, corner_cols] = 0.5 * (from_x + from_y)
+    return u, u_next
+
+
+class TorchFDTD2DBatch:
+    """FDTD state for independent transmitter shots advanced in parallel."""
+
+    def __init__(self, solver: TorchFDTD2D, n_shots: int):
+        if n_shots < 1:
+            raise ValueError("n_shots must be positive.")
+        self.model = solver.model
+        self._solver = solver
+        self.dt2 = solver.dt2
+        self.n_shots = int(n_shots)
+        self.u_old = torch.zeros(
+            (self.n_shots, *self.model.shape),
+            device=self.model.device,
+            dtype=self.model.dtype,
+        )
+        self.u = torch.zeros_like(self.u_old)
+        self.batch_indices = torch.arange(self.n_shots, device=self.model.device)
+        self.source_rows = torch.zeros(
+            self.n_shots, device=self.model.device, dtype=torch.long
+        )
+        self.source_cols = torch.zeros(
+            self.n_shots, device=self.model.device, dtype=torch.long
+        )
+        self.compiled = solver.compiled
+        self._advance = _advance_field_batch
+        self._advance_adjoint = _advance_adjoint_field_batch
+        if self.compiled:
+            self._advance = torch.compile(
+                _advance_field_batch, mode="reduce-overhead", fullgraph=True
+            )
+            self._advance_adjoint = torch.compile(
+                _advance_adjoint_field_batch, mode="reduce-overhead", fullgraph=True
+            )
+
+    def reset(self):
+        with torch.inference_mode():
+            self.u_old.zero_()
+            self.u.zero_()
+
+    def set_sources(self, rows, cols):
+        rows = torch.as_tensor(rows, device=self.model.device, dtype=torch.long)
+        cols = torch.as_tensor(cols, device=self.model.device, dtype=torch.long)
+        if (
+            tuple(rows.shape) != (self.n_shots,)
+            or tuple(cols.shape) != (self.n_shots,)
+        ):
+            raise ValueError("One source row and column is required per batched shot.")
+        self.source_rows.copy_(rows)
+        self.source_cols.copy_(cols)
+
+    def step(self, source_value):
+        self.u_old, self.u = self._advance(
+            self.u_old, self.u, self.model.c2, self.model.laplacian_kernel,
+            source_value, self.source_rows, self.source_cols, self.batch_indices,
+            self._solver.k_left, self._solver.k_right,
+            self._solver.k_bottom, self._solver.k_top,
+            self._solver.corner_rows, self._solver.corner_cols,
+            self._solver.corner_rows_in, self._solver.corner_cols_in,
+            self._solver.corner_kx, self._solver.corner_ky, self.dt2,
+        )
+        if self.compiled:
+            self.u_old = self.u_old.clone()
+            self.u = self.u.clone()
+        return self.u
+
+    def adjoint_step(self, source_fields):
+        self.u_old, self.u = self._advance_adjoint(
+            self.u_old, self.u, self.model.c2, self.model.laplacian_kernel,
+            source_fields, self._solver.k_left, self._solver.k_right,
+            self._solver.k_bottom, self._solver.k_top, self._solver.corner_rows,
+            self._solver.corner_cols, self._solver.corner_rows_in,
+            self._solver.corner_cols_in, self._solver.corner_kx,
+            self._solver.corner_ky, self.dt2,
+        )
+        if self.compiled:
+            self.u_old = self.u_old.clone()
+            self.u = self.u.clone()
+        return self.u
+
+
+def simulate_shots_batch(
+    solver: TorchFDTD2D,
+    sampler: TorchRingSampler,
+    pulse: torch.Tensor,
+    source_rows,
+    source_cols,
+    n_steps: int,
+    batched: TorchFDTD2DBatch | None = None,
+):
+    """Run a batch of independent transmitter shots with a shared waveform."""
+    if batched is None:
+        batched = TorchFDTD2DBatch(solver, len(source_rows))
+    elif batched.n_shots != len(source_rows):
+        raise ValueError("Batched solver size does not match the source batch.")
+    batched.set_sources(source_rows, source_cols)
+    batched.reset()
+    traces = torch.empty(
+        (batched.n_shots, sampler.n_elements, n_steps),
+        device=solver.model.device,
+        dtype=solver.model.dtype,
+    )
+    zero = torch.zeros((), device=solver.model.device, dtype=solver.model.dtype)
+    with torch.inference_mode():
+        for step in range(n_steps):
+            source_value = pulse[step] if step < pulse.numel() else zero
+            fields = batched.step(source_value)
+            traces[:, :, step] = sampler.record_batch(fields)
+    return traces, batched.u
