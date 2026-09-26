@@ -17,6 +17,7 @@ import torch
 from fdtd2d import (
     RingArray,
     axis_centers,
+    load_ct_ring_grid,
     n_steps_for_crossing,
     stable_dt,
 )
@@ -65,11 +66,39 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="2D ring FWI on slowness-squared with a PyTorch adjoint",
     )
-    parser.add_argument(
+    medium = parser.add_mutually_exclusive_group()
+    medium.add_argument(
         "--phantom",
         choices=("disk", "shepp-logan"),
         default="disk",
         help="True sound-speed phantom (default: disk)",
+    )
+    medium.add_argument(
+        "--ct-speed",
+        type=Path,
+        metavar="PATH",
+        help="Load the .npz sound-speed map produced by ct_to_speed.py.",
+    )
+    parser.add_argument(
+        "--ring-clearance-mm",
+        type=float,
+        default=10.0,
+        metavar="MM",
+        help="CT body-to-ring clearance (default: 10 mm).",
+    )
+    parser.add_argument(
+        "--ct-padding-speed",
+        type=float,
+        default=1480.0,
+        metavar="M_S",
+        help="Coupling-medium speed outside the CT body (default: 1480 m/s).",
+    )
+    parser.add_argument(
+        "--ct-edge-margin",
+        type=int,
+        default=8,
+        metavar="PIXELS",
+        help="Grid boundary margin outside the CT ring (default: 8 pixels).",
     )
     parser.add_argument(
         "--n-elements", type=int, default=N_ELEMENTS, metavar="N",
@@ -200,6 +229,8 @@ def build_medium(x_m, y_m, phantom="disk"):
     """Return c(x, y) in m/s."""
     x, y = np.meshgrid(x_m, y_m, indexing="xy")
     c = np.full_like(x, C0)
+    if ct_speed is not None:
+        return
     if phantom == "disk":
         c[x**2 + y**2 <= PHANTOM_RADIUS**2] = PHANTOM_C
     elif phantom == "shepp-logan":
@@ -710,6 +741,7 @@ def print_summary(
     source_history,
     shot_seed,
     phantom,
+    ct_speed,
     dt,
     n_steps,
     execution_device,
@@ -719,7 +751,10 @@ def print_summary(
     step_size,
 ):
     print("2D ring FWI results")
-    print(f"  Phantom:                         {phantom}")
+    if ct_speed is None:
+        print(f"  Phantom:                         {phantom}")
+    else:
+        print(f"  Phantom:                         CT sound-speed map ({ct_speed})")
     print(f"  Precomputed observed shots:      all {n_elements} transmitters")
     print(f"  Gradient shots per evaluation:   {n_shots}")
     print(f"  Random shot seed:                {shot_seed}")
@@ -743,6 +778,8 @@ def print_summary(
           f"{float(c_true[mask].min()):.0f}–{float(c_true[mask].max()):.0f} m/s")
     print(f"  Interior c range (reconstructed): "
           f"{float(c_est[mask].min()):.0f}–{float(c_est[mask].max()):.0f} m/s")
+    if ct_speed is not None:
+        return
     if phantom == "disk":
         print(f"  Disk target:                     r = {1e3 * PHANTOM_RADIUS:.1f} mm, "
               f"c = {PHANTOM_C:.0f} m/s  (background {C0:.0f} m/s)")
@@ -776,12 +813,38 @@ def run_inversion_stage(
     chirp_duration, initial_m=None,
 ):
     """Generate data and invert one frequency/grid-continuation level."""
-    x_m = axis_centers(grid_size, spacing)
-    y_m = axis_centers(grid_size, spacing)
-    c_true = build_medium(x_m, y_m, phantom=args.phantom)
+    ct_grid = None
+    if args.ct_speed is not None:
+        ct_grid = load_ct_ring_grid(
+            args.ct_speed,
+            grid_shape=(grid_size, grid_size),
+            padding_speed_m_s=args.ct_padding_speed,
+            ring_clearance_mm=args.ring_clearance_mm,
+            edge_margin_pixels=args.ct_edge_margin,
+        )
+        c_true = ct_grid.c
+        x_m = ct_grid.x_m
+        y_m = ct_grid.y_m
+        spacing = ct_grid.spacing_m
+        ring_radius = ct_grid.ring_radius_m
+        background_speed = args.ct_padding_speed
+    else:
+        x_m = axis_centers(grid_size, spacing)
+        y_m = axis_centers(grid_size, spacing)
+        c_true = build_medium(x_m, y_m, phantom=args.phantom)
+        ring_radius = RING_RADIUS
+        background_speed = C0
+    if args.ct_speed is not None and (
+        float(c_true.min()) < args.c_min or float(c_true.max()) > args.c_max
+    ):
+        print(
+            "  Warning: CT speeds exceed the reconstruction bounds; "
+            f"use --c-min {float(c_true.min()):.0f} and --c-max "
+            f"{float(c_true.max()):.0f} (or wider) to recover their full range."
+        )
     c_ceiling = max(float(c_true.max()), float(args.c_max), C0)
     dt = stable_dt(c_ceiling, spacing, spacing, cfl=CFL)
-    n_steps = n_steps_for_crossing(RING_RADIUS, float(c_true.min()), dt)
+    n_steps = n_steps_for_crossing(ring_radius, float(c_true.min()), dt)
     pulse = linear_chirp(
         dt, chirp_duration, f_start, f_end, device=device, dtype=dtype,
     )
@@ -791,7 +854,7 @@ def run_inversion_stage(
 
     model = TorchScalarWave2D(c_true, spacing, spacing, device=device, dtype=dtype)
     solver = TorchFDTD2D(model, dt, compile_step=compile_step)
-    array = RingArray(args.n_elements, RING_RADIUS, x_m, y_m)
+    array = RingArray(args.n_elements, ring_radius, x_m, y_m)
     sampler = TorchRingSampler(array, device=device, dtype=dtype)
     observed_batch_size = min(args.parallel_shots, args.n_elements)
     print(
@@ -819,17 +882,18 @@ def run_inversion_stage(
         observed[start:start + batch_size].copy_(traces)
 
     mask = interior_mask(
-        x_m, y_m, RING_RADIUS, margin_m=args.margin_pixels * spacing,
+        x_m, y_m, ring_radius, margin_m=args.margin_pixels * spacing,
         center=array.center,
     )
     problem = TorchLeastSquaresFWI(
         solver, sampler, array, pulse, n_steps, args.n_shots, observed, mask,
-        alpha=args.reg, c_min=args.c_min, c_max=args.c_max, c_background=C0,
+        alpha=args.reg, c_min=args.c_min, c_max=args.c_max,
+        c_background=background_speed,
         shot_seed=args.shot_seed, parallel_shots=args.parallel_shots,
         batched_solvers=batched_solvers,
     )
     if initial_m is None:
-        m0 = np.full(c_true.shape, m_from_c(C0))
+        m0 = np.full(c_true.shape, m_from_c(background_speed))
     else:
         m0 = problem.project(resize_slowness(initial_m, c_true.shape))
 
@@ -860,7 +924,10 @@ def run_inversion_stage(
         )
     if visualizer is not None:
         plt.close(visualizer.figure)
-    return c_true, c_from_m(m_est), m_est, mask, history, problem, array, x_m, y_m, dt, n_steps
+    return (
+        c_true, c_from_m(m_est), m_est, mask, history, problem, array, x_m,
+        y_m, dt, n_steps, ct_grid,
+    )
 
 
 def main():
@@ -870,6 +937,12 @@ def main():
     validate_shot_count(args.n_elements, args.n_shots)
     if args.parallel_shots < 1:
         raise SystemExit("--parallel-shots must be at least 1.")
+    if args.ring_clearance_mm <= 0:
+        raise SystemExit("--ring-clearance-mm must be positive.")
+    if args.ct_padding_speed <= 0:
+        raise SystemExit("--ct-padding-speed must be positive.")
+    if args.ct_edge_margin < 3:
+        raise SystemExit("--ct-edge-margin must be at least 3.")
     if args.multiscale and args.coarse_only:
         raise SystemExit("--multiscale and --coarse-only cannot be combined.")
     if args.max_iter < 1:
@@ -917,7 +990,7 @@ def main():
         )
         (
             c_true, c_est, transferred_m, mask, history, problem, array,
-            x_m, y_m, dt, n_steps,
+            x_m, y_m, dt, n_steps, ct_grid,
         ) = run_inversion_stage(
             args, device, dtype, compile_step, grid_size, spacing, f_start,
             f_end, duration, initial_m=transferred_m,
@@ -932,6 +1005,7 @@ def main():
         problem.source_history,
         args.shot_seed,
         args.phantom,
+        args.ct_speed,
         dt,
         n_steps,
         device_summary(device),
