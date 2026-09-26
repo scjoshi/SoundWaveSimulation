@@ -8,6 +8,7 @@ gradient of the leapfrog scheme.
 """
 
 import argparse
+import time
 from pathlib import Path
 
 import numpy as np
@@ -229,8 +230,6 @@ def build_medium(x_m, y_m, phantom="disk"):
     """Return c(x, y) in m/s."""
     x, y = np.meshgrid(x_m, y_m, indexing="xy")
     c = np.full_like(x, C0)
-    if ct_speed is not None:
-        return
     if phantom == "disk":
         c[x**2 + y**2 <= PHANTOM_RADIUS**2] = PHANTOM_C
     elif phantom == "shepp-logan":
@@ -749,6 +748,8 @@ def print_summary(
     compiled,
     optimizer,
     step_size,
+    wall_time_s=None,
+    stage_reports=(),
 ):
     print("2D ring FWI results")
     if ct_speed is None:
@@ -771,6 +772,22 @@ def print_summary(
     elif optimizer == "adam":
         print(f"  Adam learning rate:              {step_size:.4g}")
     print(f"  Optimization iterations:         {max(len(history['misfit']) - 1, 0)}")
+    if wall_time_s is not None:
+        print(f"  Total wall time:                 {wall_time_s:.3f} s")
+    if stage_reports:
+        print("  Stage timing:")
+        for report in stage_reports:
+            print(
+                f"    {report['index']}. {report['grid_size']} x "
+                f"{report['grid_size']}, {report['spacing_mm']:.3g} mm, "
+                f"{report['f_start_khz']:.0f}–{report['f_end_khz']:.0f} kHz"
+            )
+            print(
+                f"       observed data {report['observed_s']:.3f} s; "
+                f"optimization {report['optimization_s']:.3f} s; "
+                f"stage total {report['total_s']:.3f} s; "
+                f"{report['iterations']} iterations"
+            )
     print(f"  Initial J:                       {history['misfit'][0]:.6e}")
     print(f"  Final J:                         {history['misfit'][-1]:.6e}")
     print(f"  Interior RMS c error:            {rms_c_error(c_est, c_true, mask):.3f} m/s")
@@ -810,9 +827,10 @@ def resize_slowness(m, shape):
 
 def run_inversion_stage(
     args, device, dtype, compile_step, grid_size, spacing, f_start, f_end,
-    chirp_duration, initial_m=None,
+    chirp_duration, initial_m=None, stage_index=1,
 ):
     """Generate data and invert one frequency/grid-continuation level."""
+    stage_start = time.perf_counter()
     ct_grid = None
     if args.ct_speed is not None:
         ct_grid = load_ct_ring_grid(
@@ -880,6 +898,7 @@ def run_inversion_stage(
             source_values=source_values,
         )
         observed[start:start + batch_size].copy_(traces)
+    observed_time_s = time.perf_counter() - stage_start
 
     mask = interior_mask(
         x_m, y_m, ring_radius, margin_m=args.margin_pixels * spacing,
@@ -907,6 +926,7 @@ def run_inversion_stage(
             visualizer.update(m, value)
         return value, gradient
 
+    optimization_start = time.perf_counter()
     if args.optimizer == "gradient-descent":
         m_est, history = fixed_step_gradient_descent(
             m0, evaluated_objective, problem.project, mask,
@@ -924,9 +944,21 @@ def run_inversion_stage(
         )
     if visualizer is not None:
         plt.close(visualizer.figure)
+    optimization_time_s = time.perf_counter() - optimization_start
+    stage_report = {
+        "index": stage_index,
+        "grid_size": grid_size,
+        "spacing_mm": 1.0e3 * spacing,
+        "f_start_khz": f_start / 1.0e3,
+        "f_end_khz": f_end / 1.0e3,
+        "observed_s": observed_time_s,
+        "optimization_s": optimization_time_s,
+        "total_s": time.perf_counter() - stage_start,
+        "iterations": max(len(history["misfit"]) - 1, 0),
+    }
     return (
         c_true, c_from_m(m_est), m_est, mask, history, problem, array, x_m,
-        y_m, dt, n_steps, ct_grid,
+        y_m, dt, n_steps, ct_grid, stage_report,
     )
 
 
@@ -978,7 +1010,9 @@ def main():
         run_torch_gradient_check(device, dtype, compile_step)
         return
 
+    wall_time_start = time.perf_counter()
     transferred_m = None
+    stage_reports = []
     stages = multiscale_stages(args.multiscale or args.coarse_only)
     if args.coarse_only:
         stages = stages[:1]
@@ -990,11 +1024,13 @@ def main():
         )
         (
             c_true, c_est, transferred_m, mask, history, problem, array,
-            x_m, y_m, dt, n_steps, ct_grid,
+            x_m, y_m, dt, n_steps, ct_grid, stage_report,
         ) = run_inversion_stage(
             args, device, dtype, compile_step, grid_size, spacing, f_start,
-            f_end, duration, initial_m=transferred_m,
+            f_end, duration, initial_m=transferred_m, stage_index=stage_index,
         )
+        stage_reports.append(stage_report)
+    wall_time_s = time.perf_counter() - wall_time_start
     print_summary(
         c_true,
         c_est,
@@ -1013,6 +1049,8 @@ def main():
         compile_step,
         args.optimizer,
         args.adam_lr if args.optimizer == "adam" else args.step_size,
+        wall_time_s=wall_time_s,
+        stage_reports=stage_reports,
     )
 
     figure_path = args.save_figure
