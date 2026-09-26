@@ -226,7 +226,9 @@ def forward_store(solver, sampler, array, pulse, tx, n_steps):
     return traces, wave
 
 
-def forward_store_batch(solver, sampler, array, pulse, sources, n_steps, batched):
+def forward_store_batch(
+    solver, sampler, array, source_values, sources, n_steps, batched
+):
     """Forward-model independent sources together and retain their histories."""
     rows_cols = [array.inject_rows_cols(int(tx)) for tx in sources]
     rows = np.asarray([row for row, _ in rows_cols], dtype=np.int64)
@@ -244,11 +246,9 @@ def forward_store_batch(solver, sampler, array, pulse, sources, n_steps, batched
         device=solver.model.device,
         dtype=solver.model.dtype,
     )
-    zero = torch.zeros((), device=solver.model.device, dtype=solver.model.dtype)
     with torch.inference_mode():
         for step in range(n_steps):
-            value = pulse[step] if step < pulse.numel() else zero
-            fields = batched.step(value)
+            fields = batched.step(source_values[step])
             traces[:, :, step] = sampler.record_batch(fields)
             wave[:, step].copy_(fields)
     return traces, wave
@@ -273,6 +273,7 @@ class TorchLeastSquaresFWI:
         c_background=1500.0,
         shot_seed=0,
         parallel_shots=16,
+        batched_solvers=None,
     ):
         self.solver = solver
         self.model = solver.model
@@ -280,6 +281,10 @@ class TorchLeastSquaresFWI:
         self.array = array
         self.pulse = pulse
         self.n_steps = int(n_steps)
+        self.source_values = torch.zeros(
+            self.n_steps, device=solver.model.device, dtype=solver.model.dtype
+        )
+        self.source_values[:pulse.numel()].copy_(pulse)
         self.n_shots = int(n_shots)
         if self.n_shots < 1 or self.n_shots > array.n_elements:
             raise ValueError("n_shots must be between 1 and the number of elements.")
@@ -292,7 +297,10 @@ class TorchLeastSquaresFWI:
         if self.parallel_shots < 1:
             raise ValueError("parallel_shots must be positive.")
         self.parallel_shots = min(self.parallel_shots, self.n_shots)
-        self._batched_solvers = {}
+        self._batched_solvers = (
+            {} if batched_solvers is None else batched_solvers
+        )
+        self._adjoint_sources = {}
         self._shot_rng = np.random.default_rng(shot_seed)
         self.active_sources = None
         self.source_history = []
@@ -370,6 +378,7 @@ class TorchLeastSquaresFWI:
             predicted, _ = simulate_shots_batch(
                 self.solver, self.sampler, self.pulse, rows, cols, self.n_steps,
                 batched=self._batched_solver(len(shot_batch)),
+                source_values=self.source_values,
             )
             observed = self.observed[
                 torch.as_tensor(shot_batch, device=self.model.device)
@@ -389,7 +398,7 @@ class TorchLeastSquaresFWI:
         for shot_batch in self._source_batches(sources):
             batched = self._batched_solver(len(shot_batch))
             predicted, wave = forward_store_batch(
-                self.solver, self.sampler, self.array, self.pulse, shot_batch,
+                self.solver, self.sampler, self.array, self.source_values, shot_batch,
                 self.n_steps, batched,
             )
             observed = self.observed[
@@ -422,7 +431,10 @@ class TorchLeastSquaresFWI:
     def _adjoint_accumulate_batch(self, batched, wave, residual, g_c2):
         """Run one independent adjoint per batch member and sum its gradient."""
         batched.reset()
-        source = torch.empty_like(batched.u)
+        source = self._adjoint_sources.get(batched.n_shots)
+        if source is None:
+            source = torch.empty_like(batched.u)
+            self._adjoint_sources[batched.n_shots] = source
         with torch.inference_mode():
             for n in range(self.n_steps - 1, -1, -1):
                 self.sampler.record_adjoint_batch(residual[:, :, n], out=source)
@@ -723,6 +735,8 @@ def main():
         dtype=dtype,
     )
     n_steps = max(n_steps, pulse.numel() + 1)
+    source_values = torch.zeros(n_steps, device=device, dtype=dtype)
+    source_values[:pulse.numel()].copy_(pulse)
 
     model = TorchScalarWave2D(
         c_true, DX, DY, device=device, dtype=dtype
@@ -755,6 +769,7 @@ def main():
             observed_solvers[batch_size] = batched
         traces, _ = simulate_shots_batch(
             solver, sampler, pulse, rows, cols, n_steps, batched=batched,
+            source_values=source_values,
         )
         observed[start:start + batch_size].copy_(traces)
         completed = start + batch_size
@@ -772,6 +787,7 @@ def main():
         solver, sampler, array, pulse, n_steps, args.n_shots, observed, mask,
         alpha=args.reg, c_min=args.c_min, c_max=args.c_max, c_background=C0,
         shot_seed=args.shot_seed, parallel_shots=args.parallel_shots,
+        batched_solvers=observed_solvers,
     )
     m0 = np.full(c_true.shape, m_from_c(C0))
     visualizer = None

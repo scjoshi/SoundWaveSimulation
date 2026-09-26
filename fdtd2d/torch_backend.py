@@ -359,6 +359,7 @@ class TorchRingSampler:
         for name in ("_w00", "_w10", "_w01", "_w11"):
             value = torch.as_tensor(getattr(ring_array, name), device=device, dtype=dtype)
             setattr(self, name, value)
+        self._batch_indices = {}
 
     def record(self, field):
         return (
@@ -393,8 +394,12 @@ class TorchRingSampler:
             )
         else:
             out.zero_()
-        batches = torch.arange(residual.shape[0], device=residual.device)[:, None]
-        batches = batches.expand(-1, self.n_elements)
+        n_shots = residual.shape[0]
+        batches = self._batch_indices.get(n_shots)
+        if batches is None:
+            batches = torch.arange(residual.shape[0], device=residual.device)[:, None]
+            batches = batches.expand(-1, self.n_elements)
+            self._batch_indices[n_shots] = batches
         for rows, cols, weights in (
             (self._row0, self._col0, self._w00),
             (self._row0, self._col1, self._w10),
@@ -622,6 +627,7 @@ def simulate_shots_batch(
     source_cols,
     n_steps: int,
     batched: TorchFDTD2DBatch | None = None,
+    source_values: torch.Tensor | None = None,
 ):
     """Run a batch of independent transmitter shots with a shared waveform."""
     if batched is None:
@@ -635,10 +641,15 @@ def simulate_shots_batch(
         device=solver.model.device,
         dtype=solver.model.dtype,
     )
-    zero = torch.zeros((), device=solver.model.device, dtype=solver.model.dtype)
+    if source_values is None:
+        source_values = torch.zeros(
+            n_steps, device=solver.model.device, dtype=solver.model.dtype
+        )
+        source_values[:pulse.numel()].copy_(pulse)
+    elif tuple(source_values.shape) != (n_steps,):
+        raise ValueError("source_values must contain one value per time step.")
     with torch.inference_mode():
         for step in range(n_steps):
-            source_value = pulse[step] if step < pulse.numel() else zero
-            fields = batched.step(source_value)
+            fields = batched.step(source_values[step])
             traces[:, :, step] = sampler.record_batch(fields)
     return traces, batched.u
