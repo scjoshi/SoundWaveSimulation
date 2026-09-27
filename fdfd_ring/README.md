@@ -20,6 +20,18 @@ From the repository root:
 python fdfd_ring/invert_ring_fdfd.py --device cuda --allow-tf32 --no-show
 ```
 
+For a GPU-resident quasi-Newton reconstruction, use projected L-BFGS:
+
+```bash
+python fdfd_ring/invert_ring_fdfd.py --device cuda --optimizer lbfgs \
+  --lbfgs-history-size 10 --lbfgs-max-eval 8 --no-show
+```
+
+PyTorch does not provide a literal L-BFGS-B optimizer.  This option uses
+`torch.optim.LBFGS` with its strong-Wolfe line search, then projects every
+accepted update into the speed limits set by `--c-min` and `--c-max`.  Its
+history vectors and objective evaluations remain on the selected GPU.
+
 Useful first changes are:
 
 ```bash

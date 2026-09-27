@@ -80,8 +80,16 @@ def arguments():
     parser.add_argument("--frequencies-khz", type=parse_frequencies, default=(50e3, 75e3, 100e3),
                         help="Comma-separated steady-state frequencies, e.g. 50,75,100.")
     parser.add_argument("--max-iter", type=int, default=20)
+    parser.add_argument("--optimizer", choices=("adam", "lbfgs"), default="adam",
+                        help="Projected optimizer; lbfgs uses torch.optim.LBFGS on the selected device.")
     parser.add_argument("--adam-lr", type=float, default=0.005,
                         help="Adam rate for dimensionless relative squared slowness.")
+    parser.add_argument("--lbfgs-lr", type=float, default=0.8,
+                        help="Initial step scale for projected L-BFGS (default: 0.8).")
+    parser.add_argument("--lbfgs-history-size", type=int, default=10,
+                        help="Number of GPU-resident curvature pairs retained by L-BFGS.")
+    parser.add_argument("--lbfgs-max-eval", type=int, default=8,
+                        help="Maximum objective evaluations per strong-Wolfe line search.")
     parser.add_argument("--reg", type=float, default=2e-3,
                         help="Smoothness weight on dimensionless relative squared slowness.")
     parser.add_argument("--c-min", type=float, default=1400.0)
@@ -398,6 +406,60 @@ def adam(problem, max_iter, learning_rate):
     return q, history
 
 
+def projected_lbfgs(problem, max_iter, learning_rate, history_size, max_eval):
+    """Projected L-BFGS using PyTorch's GPU optimizer and manual adjoint grads.
+
+    PyTorch has ``torch.optim.LBFGS`` but no native L-BFGS-B implementation.
+    The objective already evaluates its sound-speed bounds through
+    :meth:`FrequencyDomainFWI.project`; after every accepted strong-Wolfe step
+    this function explicitly projects the parameter back into that feasible
+    set.  All L-BFGS history vectors, dot products, line-search trial points,
+    and FDFD forward/adjoint work stay on ``problem.device``.
+    """
+    if history_size < 1 or max_eval < 1:
+        raise ValueError("L-BFGS history size and maximum evaluations must be positive.")
+    q = torch.nn.Parameter(torch.zeros(problem.shape, device=problem.device))
+    optimizer = torch.optim.LBFGS(
+        [q],
+        lr=learning_rate,
+        max_iter=1,  # One accepted quasi-Newton update per reported iteration.
+        max_eval=max_eval,
+        history_size=history_size,
+        line_search_fn="strong_wolfe",
+        tolerance_grad=1e-9,
+        tolerance_change=1e-12,
+    )
+
+    with torch.no_grad():
+        value, gradient = problem.value_and_gradient(q)
+    history = [float(value.item())]
+    print(f"  iter {0:3d}  J = {history[-1]:.6e}  "
+          f"|g| = {float(torch.linalg.vector_norm(gradient[problem.mask])):.3e}  "
+          f"c = {float(problem.speed(q)[problem.mask].min()):.1f}–"
+          f"{float(problem.speed(q)[problem.mask].max()):.1f} m/s")
+
+    for iteration in range(1, max_iter + 1):
+        def closure():
+            # The adjoint gradient is explicitly derived, not an autograd
+            # graph through GMRES; assign it to the GPU Parameter for LBFGS.
+            optimizer.zero_grad(set_to_none=True)
+            with torch.no_grad():
+                closure_value, closure_gradient = problem.value_and_gradient(q)
+            q.grad = closure_gradient.detach().clone()
+            return closure_value
+
+        optimizer.step(closure)
+        with torch.no_grad():
+            q.copy_(problem.project(q))
+            value, gradient = problem.value_and_gradient(q)
+            speed = problem.speed(q)
+        history.append(float(value.item()))
+        print(f"  iter {iteration:3d}  J = {history[-1]:.6e}  "
+              f"|g| = {float(torch.linalg.vector_norm(gradient[problem.mask])):.3e}  "
+              f"c = {float(speed[problem.mask].min()):.1f}–{float(speed[problem.mask].max()):.1f} m/s")
+    return q.detach(), history
+
+
 def make_figure(c_true, c_est, history, x_m, y_m, array):
     dx, dy = x_m[1] - x_m[0], y_m[1] - y_m[0]
     extent = [1e3 * (x_m[0] - dx / 2), 1e3 * (x_m[-1] + dx / 2),
@@ -460,6 +522,8 @@ def main():
         raise SystemExit("--grid-size must be an odd integer of at least 33.")
     if args.n_elements < 2 or args.shot_batch < 1 or args.max_iter < 1:
         raise SystemExit("Need at least 2 elements, a positive batch size, and --max-iter >= 1.")
+    if args.adam_lr <= 0 or args.lbfgs_lr <= 0 or args.lbfgs_history_size < 1 or args.lbfgs_max_eval < 1:
+        raise SystemExit("Optimizer rates, L-BFGS history size, and L-BFGS max evaluations must be positive.")
     if args.c_min <= 0 or args.c_max <= args.c_min or args.pml_width_mm <= 0 or args.pml_strength <= 0:
         raise SystemExit("Invalid speed bounds or absorbing-layer settings.")
     try:
@@ -486,7 +550,13 @@ def main():
     started = time.perf_counter()
     problem = FrequencyDomainFWI(c_true, spacing, array, args.frequencies_khz, shots, mask, args, device)
     print(f"  observed steady-state data: {time.perf_counter() - started:.2f} s")
-    q, history = adam(problem, args.max_iter, args.adam_lr)
+    if args.optimizer == "adam":
+        q, history = adam(problem, args.max_iter, args.adam_lr)
+    else:
+        q, history = projected_lbfgs(
+            problem, args.max_iter, args.lbfgs_lr, args.lbfgs_history_size,
+            args.lbfgs_max_eval,
+        )
     c_est = problem.speed(q).detach().cpu().numpy()
     mask_np = mask
     rms = np.sqrt(np.mean((c_est[mask_np] - c_true[mask_np])**2))
