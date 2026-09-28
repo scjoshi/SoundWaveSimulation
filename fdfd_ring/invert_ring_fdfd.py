@@ -9,7 +9,7 @@ The implementation is matrix-free.  On CUDA it keeps all fields, the finite
 difference stencil, receiver sampling, and independent transmitter solves on
 the GPU.  That is much more practical on an A6000 than assembling a dense
 ``(N**2) x (N**2)`` Helmholtz matrix.  Each right hand side is solved by a
-Jacobi-preconditioned restarted complex GMRES iteration; transmitter batches expose
+left-preconditioned restarted complex GMRES iteration; transmitter batches expose
 the useful parallelism to the GPU.
 
 The convention is ``p(x,t) = Re[p(x) exp(-i omega t)]`` and
@@ -100,6 +100,17 @@ def arguments():
     parser.add_argument("--solver-maxiter", type=int, default=500)
     parser.add_argument("--solver-restart", type=int, default=40,
                         help="Krylov vectors per restarted GMRES cycle.")
+    parser.add_argument("--preconditioner", choices=("jacobi", "shifted-laplacian"),
+                        default="shifted-laplacian",
+                        help="GMRES preconditioner (default: shifted-laplacian V-cycle).")
+    parser.add_argument("--shifted-laplacian-damping", type=float, default=0.5,
+                        help="Imaginary shift beta in omega² m (1+i beta) (default: 0.5).")
+    parser.add_argument("--mg-levels", type=int, default=4,
+                        help="Maximum geometric multigrid levels (default: 4).")
+    parser.add_argument("--mg-smooth", type=int, default=2,
+                        help="Damped-Jacobi sweeps before and after each V-cycle level.")
+    parser.add_argument("--mg-v-cycles", type=int, default=1,
+                        help="Shifted-Laplacian V-cycles applied per GMRES preconditioner call.")
     parser.add_argument("--margin-pixels", type=int, default=2)
     parser.add_argument("--ct-padding-speed", type=float, default=1480.0)
     parser.add_argument("--ring-clearance-mm", type=float, default=10.0)
@@ -168,6 +179,101 @@ class RingReceiver:
         return out
 
 
+class JacobiPreconditioner:
+    """Diagonal inverse retained as a cheap baseline/preconditioner control."""
+
+    def __init__(self, inverse_diag):
+        self.inverse_diag = inverse_diag
+
+    def apply(self, rhs, adjoint=False):
+        diagonal = self.inverse_diag.conj() if adjoint else self.inverse_diag
+        return diagonal * rhs
+
+
+class ShiftedLaplacianMultigrid:
+    """GPU geometric V-cycle for a damped (shifted) Helmholtz operator.
+
+    The target operator is indefinite.  This preconditioner instead applies an
+    approximate inverse of ``L + omega²*m*(1+i*beta)`` with the physical edge
+    damping preserved.  The imaginary shift makes relaxation and coarse-grid
+    correction stable enough to serve as a GMRES preconditioner.  It is not a
+    replacement for the physical forward operator.
+    """
+
+    def __init__(self, physical_mass, omega, spacing, shift, max_levels, smooth, v_cycles):
+        if shift <= 0 or max_levels < 1 or smooth < 1 or v_cycles < 1:
+            raise ValueError("Shifted-Laplacian parameters must be positive.")
+        self.omega = float(omega)
+        self.smooth = int(smooth)
+        self.v_cycles = int(v_cycles)
+        # physical_mass = m * (1 + i eta). Add the standard complex shift to
+        # its real (slowness) component, preserving the PML damping already set.
+        mass = physical_mass + 1j * float(shift) * physical_mass.real
+        self.levels = []
+        current_spacing = float(spacing)
+        for _ in range(int(max_levels)):
+            ny, nx = mass.shape
+            diagonal = -4.0 / current_spacing**2 + self.omega**2 * mass
+            self.levels.append((mass, diagonal.reciprocal(), current_spacing))
+            # The FDFD grids are odd-sized.  161 -> 81 -> 41 -> 21 maintains
+            # a centered grid and exact bilinear prolongation dimensions.
+            if min(ny, nx) <= 17:
+                break
+            mass = self._restrict(mass[None])[0]
+            current_spacing *= 2.0
+
+    @staticmethod
+    def _restrict(field):
+        """Full-weighting-like restriction for a (batch, y, x) complex field."""
+        # Pooling kernels do not accept complex tensors on all PyTorch CUDA
+        # builds, so restrict real and imaginary components explicitly.
+        real = F.avg_pool2d(field.real[:, None], kernel_size=3, stride=2, padding=1)[:, 0]
+        imaginary = F.avg_pool2d(field.imag[:, None], kernel_size=3, stride=2, padding=1)[:, 0]
+        return torch.complex(real, imaginary)
+
+    @staticmethod
+    def _prolong(field, shape):
+        real = F.interpolate(field.real[:, None], size=shape, mode="bilinear", align_corners=True)[:, 0]
+        imaginary = F.interpolate(field.imag[:, None], size=shape, mode="bilinear", align_corners=True)[:, 0]
+        return torch.complex(real, imaginary)
+
+    def _matvec(self, field, level, adjoint):
+        mass, _, spacing = self.levels[level]
+        if adjoint:
+            mass = mass.conj()
+        padded = F.pad(field, (1, 1, 1, 1))
+        laplacian = (padded[:, 1:-1, :-2] + padded[:, 1:-1, 2:]
+                     + padded[:, :-2, 1:-1] + padded[:, 2:, 1:-1] - 4.0 * field) / spacing**2
+        return laplacian + self.omega**2 * mass * field
+
+    def _smooth(self, estimate, rhs, level, adjoint, sweeps):
+        _, inverse_diag, _ = self.levels[level]
+        if adjoint:
+            inverse_diag = inverse_diag.conj()
+        # Under-relaxed Jacobi is deliberately used only on the shifted system.
+        for _ in range(sweeps):
+            estimate = estimate + 0.65 * inverse_diag * (rhs - self._matvec(estimate, level, adjoint))
+        return estimate
+
+    def _v_cycle(self, rhs, level, adjoint):
+        estimate = torch.zeros_like(rhs)
+        if level == len(self.levels) - 1:
+            return self._smooth(estimate, rhs, level, adjoint, sweeps=12)
+        estimate = self._smooth(estimate, rhs, level, adjoint, self.smooth)
+        residual = rhs - self._matvec(estimate, level, adjoint)
+        coarse_error = self._v_cycle(self._restrict(residual), level + 1, adjoint)
+        estimate = estimate + self._prolong(coarse_error, rhs.shape[-2:])
+        return self._smooth(estimate, rhs, level, adjoint, self.smooth)
+
+    def apply(self, rhs, adjoint=False):
+        estimate = torch.zeros_like(rhs)
+        # Multiple V-cycles use the residual equation, not repeated application
+        # to the original RHS, so each cycle refines the same approximate solve.
+        for _ in range(self.v_cycles):
+            estimate = estimate + self._v_cycle(rhs - self._matvec(estimate, 0, adjoint), 0, adjoint)
+        return estimate
+
+
 class Helmholtz2D:
     """Matrix-free finite-difference Helmholtz operator and batched solver."""
 
@@ -192,6 +298,14 @@ class Helmholtz2D:
         self.diag = self.diag_lap + self.omega**2 * self.mass
         self.inverse_diag = self.diag.reciprocal()
 
+    def make_preconditioner(self, kind="jacobi", shift=0.5, levels=4, smooth=2, v_cycles=1):
+        """Create a reusable preconditioner for this frequency/model pair."""
+        if kind == "jacobi":
+            return JacobiPreconditioner(self.inverse_diag)
+        return ShiftedLaplacianMultigrid(
+            self.mass, self.omega, self.spacing, shift, levels, smooth, v_cycles,
+        )
+
     def _matvec_impl(self, field, adjoint=False):
         padded = F.pad(field, (1, 1, 1, 1))
         lap = (padded[:, 1:-1, :-2] + padded[:, 1:-1, 2:]
@@ -199,7 +313,7 @@ class Helmholtz2D:
         mass = self.mass.conj() if adjoint else self.mass
         return lap + self.omega**2 * mass * field
 
-    def solve(self, rhs, tol, maxiter, adjoint=False, restart=40):
+    def solve(self, rhs, tol, maxiter, adjoint=False, restart=40, preconditioner=None):
         """Independently solve RHS with preconditioned, restarted GMRES.
 
         Helmholtz systems are indefinite, so conventional conjugate gradient
@@ -209,7 +323,9 @@ class Helmholtz2D:
         """
         x = torch.zeros_like(rhs)
         matvec = lambda z: self._matvec(z, adjoint)
-        inv_diag = self.inverse_diag.conj() if adjoint else self.inverse_diag
+        if preconditioner is None:
+            preconditioner = JacobiPreconditioner(self.inverse_diag)
+        apply_preconditioner = lambda value: preconditioner.apply(value, adjoint=adjoint)
         rhs_norm = torch.sqrt(dot(rhs, rhs).real).clamp_min(1e-20)
         identity_cache = {}
         iteration = 0
@@ -222,14 +338,14 @@ class Helmholtz2D:
             if bool((residual <= tol).all()):
                 break
             k = min(int(restart), maxiter - iteration)
-            # Left Jacobi preconditioning.  A vector list avoids allocating a
+            # Left preconditioning.  A vector list avoids allocating a
             # giant dense Helmholtz matrix; the only dense solve is k x k.
-            preconditioned_r = inv_diag * r
+            preconditioned_r = apply_preconditioner(r)
             beta = torch.sqrt(dot(preconditioned_r, preconditioned_r).real.clamp_min(1e-30))
             basis = [preconditioned_r / beta[:, None, None]]
             hessenberg = torch.zeros((rhs.shape[0], k + 1, k), device=rhs.device, dtype=self.dtype)
             for column in range(k):
-                vector = inv_diag * matvec(basis[column])
+                vector = apply_preconditioner(matvec(basis[column]))
                 for row in range(column + 1):
                     coefficient = dot(basis[row], vector)
                     hessenberg[:, row, column] = coefficient
@@ -239,22 +355,25 @@ class Helmholtz2D:
                 basis.append(vector / next_norm[:, None, None])
             g = torch.zeros((rhs.shape[0], k + 1), device=rhs.device, dtype=self.dtype)
             g[:, 0] = beta
-            # Solve the tiny normal equations.  The scale-aware diagonal term
-            # guards a rare Arnoldi breakdown without perturbing resolved RHSs.
-            h_dagger = hessenberg.mH
-            normal = h_dagger @ hessenberg
-            normal_scale = normal.abs().amax(dim=(-2, -1)).clamp_min(1.0)
+            # Solve the tiny least-squares problem min ||g - H y|| by QR.
+            # Normal equations would square cond(H), which is costly in
+            # complex64.  The scale-aware diagonal term on R guards a rare
+            # Arnoldi breakdown without perturbing resolved RHSs.
+            q_factor, r_factor = torch.linalg.qr(hessenberg)
+            r_scale = r_factor.abs().amax(dim=(-2, -1)).clamp_min(1e-30)
             eye = identity_cache.get(k)
             if eye is None:
                 eye = torch.eye(k, device=rhs.device, dtype=self.dtype)[None]
                 identity_cache[k] = eye
-            coefficients = torch.linalg.solve(
-                normal + (1e-7 * normal_scale)[:, None, None] * eye,
-                (h_dagger @ g[..., None]),
+            coefficients = torch.linalg.solve_triangular(
+                r_factor + (1e-7 * r_scale)[:, None, None] * eye,
+                q_factor.mH @ g[..., None],
+                upper=True,
             )[:, :, 0]
             x = x + sum(coefficients[:, index, None, None] * basis[index] for index in range(k))
             iteration += k
-        residual = torch.sqrt(dot(rhs - matvec(x), rhs - matvec(x)).real.clamp_min(0.0)) / rhs_norm
+        r = rhs - matvec(x)
+        residual = torch.sqrt(dot(r, r).real.clamp_min(0.0)) / rhs_norm
         return x, residual, iteration
 
 
@@ -327,8 +446,13 @@ class FrequencyDomainFWI:
         with torch.inference_mode():
             for operator in self.operators:
                 operator.set_model(m_true)
+                preconditioner = operator.make_preconditioner(
+                    self.args.preconditioner, self.args.shifted_laplacian_damping,
+                    self.args.mg_levels, self.args.mg_smooth, self.args.mg_v_cycles,
+                )
                 fields, residual, _ = operator.solve(self.source_rhs, self.args.solver_tol,
-                                                     self.args.solver_maxiter, restart=self.args.solver_restart)
+                                                     self.args.solver_maxiter, restart=self.args.solver_restart,
+                                                     preconditioner=preconditioner)
                 self._warn_solver("observed", residual)
                 data.append(self.receivers.sample(fields).detach())
         return data
@@ -338,12 +462,23 @@ class FrequencyDomainFWI:
         if worst > self.args.solver_tol * 10:
             print(f"  warning: {name} Helmholtz solve relative residual {worst:.2e}")
 
-    def project(self, q):
+    def bounds(self):
+        """Lower/upper limits on relative slowness perturbation q."""
         lower = (1.0 / self.args.c_max**2) / self.m_background - 1.0
         upper = (1.0 / self.args.c_min**2) / self.m_background - 1.0
+        return lower, upper
+
+    def project(self, q):
+        lower, upper = self.bounds()
         result = q.clamp(lower, upper).clone()
         result[~self.mask] = 0.0
         return result
+
+    def projected_gradient(self, q, gradient):
+        """Zero components whose descent step would leave the feasible box."""
+        lower, upper = self.bounds()
+        blocked = ((q <= lower) & (gradient > 0)) | ((q >= upper) & (gradient < 0))
+        return torch.where(blocked, torch.zeros_like(gradient), gradient)
 
     def speed(self, q):
         m = self.m_background * (1.0 + self.project(q))
@@ -357,10 +492,15 @@ class FrequencyDomainFWI:
         count = len(self.operators) * len(self.shots) * self.array.n_elements
         for frequency_index, operator in enumerate(self.operators):
             operator.set_model(m)
+            preconditioner = operator.make_preconditioner(
+                self.args.preconditioner, self.args.shifted_laplacian_damping,
+                self.args.mg_levels, self.args.mg_smooth, self.args.mg_v_cycles,
+            )
             for start in range(0, len(self.shots), self.args.shot_batch):
                 stop = min(start + self.args.shot_batch, len(self.shots))
                 fields, residual, _ = operator.solve(self.source_rhs[start:stop], self.args.solver_tol,
-                                                     self.args.solver_maxiter, restart=self.args.solver_restart)
+                                                     self.args.solver_maxiter, restart=self.args.solver_restart,
+                                                     preconditioner=preconditioner)
                 self._warn_solver("forward", residual)
                 prediction = self.receivers.sample(fields)
                 data_residual = prediction - self.observed[frequency_index][start:stop]
@@ -372,7 +512,8 @@ class FrequencyDomainFWI:
                 rhs_adjoint = self.receivers.adjoint(data_residual / count, self.shape)
                 adjoint, residual, _ = operator.solve(rhs_adjoint, self.args.solver_tol,
                                                        self.args.solver_maxiter, adjoint=True,
-                                                       restart=self.args.solver_restart)
+                                                       restart=self.args.solver_restart,
+                                                       preconditioner=preconditioner)
                 self._warn_solver("adjoint", residual)
                 # δJ = Re[-lambdaᴴ (ω² mass_scale δm) p].
                 contribution = -(adjoint.conj() * (operator.omega**2 * operator.mass_scale)
@@ -411,14 +552,17 @@ def projected_lbfgs(problem, max_iter, learning_rate, history_size, max_eval):
 
     PyTorch has ``torch.optim.LBFGS`` but no native L-BFGS-B implementation.
     The objective already evaluates its sound-speed bounds through
-    :meth:`FrequencyDomainFWI.project`; after every accepted strong-Wolfe step
-    this function explicitly projects the parameter back into that feasible
-    set.  All L-BFGS history vectors, dot products, line-search trial points,
-    and FDFD forward/adjoint work stay on ``problem.device``.
+    :meth:`FrequencyDomainFWI.project`.  Two safeguards keep that consistent
+    with the quasi-Newton model: the gradient handed to LBFGS is the projected
+    gradient (zero where a descent step would leave the box), and whenever an
+    accepted step has to be projected back, the curvature history is discarded
+    because its step vectors no longer describe the actual update.  All L-BFGS
+    history vectors, dot products, line-search trial points, and FDFD
+    forward/adjoint work stay on ``problem.device``.
     """
     if history_size < 1 or max_eval < 1:
         raise ValueError("L-BFGS history size and maximum evaluations must be positive.")
-    q = torch.nn.Parameter(torch.zeros(problem.shape, device=problem.device))
+    q = torch.nn.Parameter(problem.project(torch.zeros(problem.shape, device=problem.device)))
     optimizer = torch.optim.LBFGS(
         [q],
         lr=learning_rate,
@@ -429,34 +573,45 @@ def projected_lbfgs(problem, max_iter, learning_rate, history_size, max_eval):
         tolerance_grad=1e-9,
         tolerance_change=1e-12,
     )
+    # The strong-Wolfe search usually finishes at the accepted point, so the
+    # most recent evaluation is reused for logging instead of re-solving.
+    cache = {}
 
-    with torch.no_grad():
-        value, gradient = problem.value_and_gradient(q)
-    history = [float(value.item())]
-    print(f"  iter {0:3d}  J = {history[-1]:.6e}  "
-          f"|g| = {float(torch.linalg.vector_norm(gradient[problem.mask])):.3e}  "
-          f"c = {float(problem.speed(q)[problem.mask].min()):.1f}–"
-          f"{float(problem.speed(q)[problem.mask].max()):.1f} m/s")
-
-    for iteration in range(1, max_iter + 1):
-        def closure():
-            # The adjoint gradient is explicitly derived, not an autograd
-            # graph through GMRES; assign it to the GPU Parameter for LBFGS.
-            optimizer.zero_grad(set_to_none=True)
-            with torch.no_grad():
-                closure_value, closure_gradient = problem.value_and_gradient(q)
-            q.grad = closure_gradient.detach().clone()
-            return closure_value
-
-        optimizer.step(closure)
+    def evaluate(point):
+        if "q" in cache and torch.equal(cache["q"], point):
+            return cache["value"], cache["gradient"]
         with torch.no_grad():
-            q.copy_(problem.project(q))
-            value, gradient = problem.value_and_gradient(q)
-            speed = problem.speed(q)
+            value, gradient = problem.value_and_gradient(point)
+            gradient = problem.projected_gradient(problem.project(point), gradient)
+        cache.update(q=point.detach().clone(), value=value, gradient=gradient)
+        return value, gradient
+
+    def closure():
+        # The adjoint gradient is explicitly derived, not an autograd
+        # graph through GMRES; assign it to the GPU Parameter for LBFGS.
+        optimizer.zero_grad(set_to_none=True)
+        closure_value, closure_gradient = evaluate(q.detach())
+        q.grad = closure_gradient.clone()
+        return closure_value
+
+    def report(iteration):
+        value, gradient = evaluate(q.detach())
+        speed = problem.speed(q.detach())
         history.append(float(value.item()))
         print(f"  iter {iteration:3d}  J = {history[-1]:.6e}  "
               f"|g| = {float(torch.linalg.vector_norm(gradient[problem.mask])):.3e}  "
               f"c = {float(speed[problem.mask].min()):.1f}–{float(speed[problem.mask].max()):.1f} m/s")
+
+    history = []
+    report(0)
+    for iteration in range(1, max_iter + 1):
+        optimizer.step(closure)
+        with torch.no_grad():
+            projected = problem.project(q)
+            if not torch.equal(projected, q):
+                q.copy_(projected)
+                optimizer.state[q].clear()
+        report(iteration)
     return q.detach(), history
 
 
@@ -473,7 +628,7 @@ def make_figure(c_true, c_est, history, x_m, y_m, array):
         axis.set(title=title, xlabel="x (mm)", ylabel="y (mm)")
         fig.colorbar(im, ax=axis, label="m/s")
     axes[2].semilogy(history, "o-", color="tab:blue")
-    axes[2].set(title="Complex data misfit", xlabel="Adam iteration", ylabel="J")
+    axes[2].set(title="Complex data misfit", xlabel="Iteration", ylabel="J")
     axes[2].grid(alpha=0.3)
     return fig
 
@@ -524,6 +679,8 @@ def main():
         raise SystemExit("Need at least 2 elements, a positive batch size, and --max-iter >= 1.")
     if args.adam_lr <= 0 or args.lbfgs_lr <= 0 or args.lbfgs_history_size < 1 or args.lbfgs_max_eval < 1:
         raise SystemExit("Optimizer rates, L-BFGS history size, and L-BFGS max evaluations must be positive.")
+    if args.shifted_laplacian_damping <= 0 or args.mg_levels < 1 or args.mg_smooth < 1 or args.mg_v_cycles < 1:
+        raise SystemExit("Shifted-Laplacian damping, levels, smoothing, and V-cycles must be positive.")
     if args.c_min <= 0 or args.c_max <= args.c_min or args.pml_width_mm <= 0 or args.pml_strength <= 0:
         raise SystemExit("Invalid speed bounds or absorbing-layer settings.")
     try:
@@ -547,6 +704,7 @@ def main():
     print(f"  grid: {args.grid_size} x {args.grid_size}; spacing: {spacing * 1e3:.3f} mm")
     print(f"  ring: {radius * 1e3:.1f} mm; elements/shots/batch: {args.n_elements}/{args.n_shots}/{args.shot_batch}")
     print("  frequencies: " + ", ".join(f"{f / 1e3:g} kHz" for f in args.frequencies_khz))
+    print(f"  preconditioner: {args.preconditioner}")
     started = time.perf_counter()
     problem = FrequencyDomainFWI(c_true, spacing, array, args.frequencies_khz, shots, mask, args, device)
     print(f"  observed steady-state data: {time.perf_counter() - started:.2f} s")

@@ -1,6 +1,6 @@
 """Modular 2D FDTD package for a ring-array transducer."""
 
-from .array import RingArray
+from .array import ArcArray, RingArray
 from .ct_medium import CTRingGrid, load_ct_ring_grid
 from .experiment import (
     axis_centers,
@@ -13,6 +13,7 @@ from .sources import linear_chirp
 from .wave import ScalarWave2D, WaveModel
 
 __all__ = [
+    "ArcArray",
     "FDTD2D",
     "CTRingGrid",
     "RingArray",

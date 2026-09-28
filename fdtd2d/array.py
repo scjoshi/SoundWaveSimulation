@@ -103,3 +103,65 @@ class RingArray:
         np.add.at(out, (self._row1, self._col0), residual * self._w01)
         np.add.at(out, (self._row1, self._col1), residual * self._w11)
         return out
+
+
+class ArcArray(RingArray):
+    """N point elements equally spaced along a circular arc.
+
+    The arc lies on a circle of ``radius_m`` about ``center`` and spans
+    ``span_deg`` degrees, centered on the polar angle ``center_deg``
+    (0 = +x, 90 = +y). Element 0 is at the smallest angle. The circle center
+    is the arc's geometric focus. Sampling and injection match RingArray.
+
+    ``allow_shared_pixels`` skips the pitch >= dx check, e.g. for coarse
+    multiscale grids where neighboring elements may round to one pixel.
+    """
+
+    def __init__(
+        self, n_elements, radius_m, span_deg, center_deg, x_m, y_m,
+        center=(0.0, 0.0), allow_shared_pixels=False,
+    ):
+        if n_elements < 2:
+            raise ValueError("Need at least 2 arc elements.")
+        if not 0.0 < span_deg < 360.0:
+            raise ValueError("Arc span must be between 0 and 360 degrees.")
+        self.n_elements = int(n_elements)
+        self.radius_m = float(radius_m)
+        self.span_deg = float(span_deg)
+        self.center_deg = float(center_deg)
+        self.center = (float(center[0]), float(center[1]))
+        self.allow_shared_pixels = bool(allow_shared_pixels)
+        half = 0.5 * np.deg2rad(self.span_deg)
+        self.theta = np.deg2rad(self.center_deg) + np.linspace(
+            -half, half, self.n_elements
+        )
+        self.x = self.center[0] + self.radius_m * np.cos(self.theta)
+        self.y = self.center[1] + self.radius_m * np.sin(self.theta)
+        self._x_axis = np.asarray(x_m, dtype=float)
+        self._y_axis = np.asarray(y_m, dtype=float)
+        self.cols, self.rows = self._nearest_indices()
+        self._check_inside()
+        self._init_bilinear()
+
+    @property
+    def pitch_m(self):
+        """Arc length between neighboring elements."""
+        return self.radius_m * np.deg2rad(self.span_deg) / (self.n_elements - 1)
+
+    def _check_inside(self):
+        ny = self._y_axis.size
+        nx = self._x_axis.size
+        if np.any(self.cols < 1) or np.any(self.cols > nx - 2):
+            raise ValueError("Arc extends too close to the x boundaries.")
+        if np.any(self.rows < 1) or np.any(self.rows > ny - 2):
+            raise ValueError("Arc extends too close to the y boundaries.")
+        dx = abs(self._x_axis[1] - self._x_axis[0])
+        if self.pitch_m < dx and not self.allow_shared_pixels:
+            max_elements = int(self.radius_m * np.deg2rad(self.span_deg) / dx) + 1
+            raise ValueError(
+                f"Element pitch {self.pitch_m:.4g} m is smaller than dx = {dx:.4g} m; "
+                "two elements would share a pixel. At most "
+                f"{max_elements} elements fit a {self.span_deg:g}° arc of radius "
+                f"{1e3 * self.radius_m:g} mm on this grid; reduce N, widen the "
+                "span, or refine the grid."
+            )

@@ -64,6 +64,12 @@ def parse_args():
     parser.add_argument("--solver-tol", type=float, default=1e-5)
     parser.add_argument("--solver-maxiter", type=int, default=500)
     parser.add_argument("--solver-restart", type=int, default=40)
+    parser.add_argument("--preconditioner", choices=("jacobi", "shifted-laplacian"),
+                        default="shifted-laplacian")
+    parser.add_argument("--shifted-laplacian-damping", type=float, default=0.5)
+    parser.add_argument("--mg-levels", type=int, default=4)
+    parser.add_argument("--mg-smooth", type=int, default=2)
+    parser.add_argument("--mg-v-cycles", type=int, default=1)
     parser.add_argument("--parallel-shots", type=int, metavar="N",
                         help="Simulate every element as transmitter, in batches of N.")
     parser.add_argument("--device", default="auto")
@@ -119,6 +125,10 @@ def simulate(args, c_map, spacing, array, device):
     operator = Helmholtz2D(c_map.shape, spacing, 2 * math.pi * args.frequency_khz * 1e3,
                            sponge, device, compile_stencil=compiled)
     operator.set_model(torch.as_tensor(1.0 / c_map**2, device=device, dtype=torch.float32))
+    preconditioner = operator.make_preconditioner(
+        args.preconditioner, args.shifted_laplacian_damping, args.mg_levels,
+        args.mg_smooth, args.mg_v_cycles,
+    )
     receiver = RingReceiver(array, device)
     transmitters = (np.arange(array.n_elements, dtype=int)
                     if args.parallel_shots is not None else np.asarray([args.tx]))
@@ -128,7 +138,8 @@ def simulate(args, c_map, spacing, array, device):
         tx_batch = transmitters[start:start + batch_size]
         rhs = source_rhs(array, tx_batch, c_map.shape, spacing, args.source_phase_deg, device)
         fields, residual, _ = operator.solve(rhs, args.solver_tol, args.solver_maxiter,
-                                             restart=args.solver_restart)
+                                             restart=args.solver_restart,
+                                             preconditioner=preconditioner)
         worst_residual = max(worst_residual, float(residual.max().item()))
         traces.append(receiver.sample(fields).detach().cpu())
         if selected_field is None:
@@ -180,6 +191,8 @@ def main():
         raise SystemExit("--tx must select one of at least two elements.")
     if args.frequency_khz <= 0 or args.pml_width_mm <= 0 or args.pml_strength <= 0:
         raise SystemExit("Frequency and PML settings must be positive.")
+    if args.shifted_laplacian_damping <= 0 or args.mg_levels < 1 or args.mg_smooth < 1 or args.mg_v_cycles < 1:
+        raise SystemExit("Shifted-Laplacian parameters must be positive.")
     if args.parallel_shots is not None and args.parallel_shots < 1:
         raise SystemExit("--parallel-shots must be positive.")
     device = resolve_device(args.device)
@@ -197,6 +210,7 @@ def main():
     print(f"  ring / elements: {radius * 1e3:.1f} mm / {args.n_elements}")
     print(f"  frequency: {args.frequency_khz:g} kHz; source tx: {args.tx}")
     print(f"  transmitters solved: {len(transmitters)}; compiled stencil: {compiled}")
+    print(f"  preconditioner: {args.preconditioner}")
     print(f"  worst relative linear residual: {residual:.2e}; wall time: {elapsed:.2f} s")
     if residual > args.solver_tol * 10:
         print("  warning: increase --solver-maxiter or adjust PML settings for a tighter solve.")

@@ -255,7 +255,7 @@ def forward_store(solver, sampler, array, pulse, tx, n_steps):
     solver.reset()
     solver.set_source(row, col)
     traces = torch.empty(
-        (array.n_elements, n_steps),
+        (sampler.n_elements, n_steps),
         device=solver.model.device,
         dtype=solver.model.dtype,
     )
@@ -287,7 +287,7 @@ def forward_store_batch(
     batched.reset()
     n_batch = len(sources)
     traces = torch.empty(
-        (n_batch, array.n_elements, n_steps),
+        (n_batch, sampler.n_elements, n_steps),
         device=solver.model.device,
         dtype=solver.model.dtype,
     )

@@ -29,8 +29,18 @@ python fdfd_ring/invert_ring_fdfd.py --device cuda --optimizer lbfgs \
 
 PyTorch does not provide a literal L-BFGS-B optimizer.  This option uses
 `torch.optim.LBFGS` with its strong-Wolfe line search, then projects every
-accepted update into the speed limits set by `--c-min` and `--c-max`.  Its
-history vectors and objective evaluations remain on the selected GPU.
+accepted update into the speed limits set by `--c-min` and `--c-max`.  The
+gradient passed to L-BFGS is the projected gradient (zero where a descent step
+would leave the bounds), and the curvature history is reset whenever a step
+has to be projected back.  Its history vectors and objective evaluations remain
+on the selected GPU.
+
+The default Helmholtz preconditioner is a GPU-resident geometric multigrid
+V-cycle for a shifted-Laplacian operator.  The physical forward equation is
+unchanged; the damped operator is used only inside GMRES.  Use
+`--preconditioner jacobi` as a baseline, or tune `--mg-levels`, `--mg-smooth`,
+`--mg-v-cycles`, and `--shifted-laplacian-damping` when convergence needs
+benchmarking.
 
 Useful first changes are:
 
