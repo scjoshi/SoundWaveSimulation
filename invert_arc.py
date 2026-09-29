@@ -40,6 +40,14 @@ from fdtd2d.inversion import (
     m_from_c,
     polak_ribiere,
 )
+from fdtd2d.inversion.neural import (
+    NeuralFWIObjective,
+    add_neural_arguments,
+    describe_neural_model,
+    neural_model_from_args,
+    optimize_neural,
+    validate_neural_arguments,
+)
 from fdtd2d.phantoms import SHEPP_DC, shepp_logan_speed
 from fdtd2d.torch_backend import (
     TorchFDTD2D,
@@ -255,6 +263,7 @@ def parse_args():
         "--no-show", action="store_true",
         help="Run without opening windows",
     )
+    add_neural_arguments(parser)
     return parser.parse_args()
 
 
@@ -399,6 +408,9 @@ def plot_arc_inversion(c_true, c_est, history, x_m, y_m, tx_array, rx_array, mas
         "cg": ("adjoint Polak–Ribière CG", "CG iteration"),
         "gradient-descent": ("adjoint fixed-step gradient descent", "Gradient-descent iteration"),
         "adam": ("adjoint projected Adam", "Adam iteration"),
+        "neural-adam": ("neural network weights, Adam", "Adam iteration"),
+        "neural-gradient-descent": ("neural network weights, gradient descent",
+                                    "Gradient-descent iteration"),
     }
     method_title, iteration_label = labels[optimizer]
     dx, dy = x_m[1] - x_m[0], y_m[1] - y_m[0]
@@ -439,6 +451,7 @@ def plot_arc_inversion(c_true, c_est, history, x_m, y_m, tx_array, rx_array, mas
 def print_summary(
     c_true, c_est, mask, history, args, source_history, dt, n_steps,
     execution_device, compiled, tx_array, rx_array, wall_time_s=None, stage_reports=(),
+    model_description="pixel slowness",
 ):
     print("2D limited-angle arc FWI results")
     if args.ct_speed is None:
@@ -459,8 +472,11 @@ def print_summary(
     print(f"  dt:                              {dt:.4g} s")
     print(f"  PyTorch device:                  {execution_device}")
     print(f"  Precision / compiled step:       {args.dtype} / {compiled}")
+    print(f"  Model:                           {model_description}")
     print(f"  Optimizer:                       {args.optimizer}")
-    if args.optimizer == "gradient-descent":
+    if args.model == "neural":
+        print(f"  Network learning rate:           {args.nn_lr:.4g}")
+    elif args.optimizer == "gradient-descent":
         print(f"  Fixed step size:                 {args.step_size:.4g}")
     elif args.optimizer == "adam":
         print(f"  Adam learning rate:              {args.adam_lr:.4g}")
@@ -499,9 +515,13 @@ def print_summary(
 
 def run_inversion_stage(
     args, device, dtype, compile_step, grid_size, spacing, f_start, f_end,
-    chirp_duration, initial_m=None, stage_index=1,
+    chirp_duration, initial_m=None, stage_index=1, neural_model=None,
 ):
-    """Generate limited-angle data and invert one frequency/grid level."""
+    """Generate limited-angle data and invert one frequency/grid level.
+
+    With ``neural_model`` the network weights are optimized instead of pixel
+    slowness; the same network carries over between stages.
+    """
     stage_start = time.perf_counter()
     ct_grid = None
     if args.ct_speed is not None:
@@ -585,7 +605,13 @@ def run_inversion_stage(
         return value, gradient
 
     optimization_start = time.perf_counter()
-    if args.optimizer == "gradient-descent":
+    if neural_model is not None:
+        neural_model.set_grid(x_m, y_m, mask)
+        m_est, history = optimize_neural(
+            NeuralFWIObjective(problem, neural_model), args.optimizer, args.max_iter,
+            args.nn_lr, on_evaluate=None if visualizer is None else visualizer.update,
+        )
+    elif args.optimizer == "gradient-descent":
         m_est, history = fixed_step_gradient_descent(
             m0, evaluated_objective, problem.project, mask,
             step_size=args.step_size, max_iter=args.max_iter, verbose=True,
@@ -653,6 +679,8 @@ def main():
         raise SystemExit("--cpu-threads must be zero or positive.")
     if args.show_iterations and args.no_show:
         raise SystemExit("--show-iterations cannot be combined with --no-show.")
+    background_speed = args.ct_padding_speed if args.ct_speed is not None else C0
+    validate_neural_arguments(args, background_speed)
     try:
         device = resolve_device(args.device)
         configure_runtime(device, cpu_threads=args.cpu_threads, allow_tf32=args.allow_tf32)
@@ -665,6 +693,13 @@ def main():
     if args.gradient_check:
         run_arc_gradient_check(device, dtype, compile_step)
         return
+
+    neural_model = None
+    if args.model == "neural":
+        # Coordinates are normalized by the arc radius; fixed across stages.
+        neural_model = neural_model_from_args(
+            args, background_speed, 1e-3 * args.radius_mm, device, dtype
+        )
 
     wall_time_start = time.perf_counter()
     transferred_m = None
@@ -685,6 +720,7 @@ def main():
             ) = run_inversion_stage(
                 args, device, dtype, compile_step, grid_size, spacing, f_start,
                 f_end, duration, initial_m=transferred_m, stage_index=stage_index,
+                neural_model=neural_model,
             )
         except ValueError as exc:
             raise SystemExit(f"Invalid acquisition setup: {exc}") from exc
@@ -694,6 +730,8 @@ def main():
         c_true, c_est, mask, history, args, problem.source_history, dt, n_steps,
         device_summary(device), compile_step, tx_array, rx_array,
         wall_time_s=wall_time_s, stage_reports=stage_reports,
+        model_description=("pixel slowness" if neural_model is None
+                           else describe_neural_model(neural_model)),
     )
 
     figure_path = args.save_figure
@@ -702,7 +740,7 @@ def main():
     if not args.no_show or figure_path:
         figure = plot_arc_inversion(
             c_true, c_est, history, x_m, y_m, tx_array, rx_array, mask,
-            optimizer=args.optimizer,
+            optimizer=args.optimizer if neural_model is None else f"neural-{args.optimizer}",
         )
         if figure_path:
             figure_path.parent.mkdir(parents=True, exist_ok=True)

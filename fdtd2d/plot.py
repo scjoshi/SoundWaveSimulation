@@ -163,6 +163,11 @@ def plot_inversion(
             "Gradient-descent iteration",
         ),
         "adam": ("adjoint projected Adam", "Adam iteration"),
+        "neural-adam": ("neural network weights, Adam", "Adam iteration"),
+        "neural-gradient-descent": (
+            "neural network weights, gradient descent",
+            "Gradient-descent iteration",
+        ),
     }
     method_title, iteration_label = optimizer_labels.get(
         optimizer,
