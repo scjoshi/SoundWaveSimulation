@@ -1,0 +1,28 @@
+# Conda env for this repo: FDTD/FDFD simulation + MAISI synthetic-CT slice generation.
+#   conda env create -f environment.yml
+#   conda activate soundwave
+name: soundwave
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pip
+  - pip:
+      - --extra-index-url https://download.pytorch.org/whl/cu130
+      # Simulation (requirements-ct.txt)
+      - numpy
+      - scipy
+      - matplotlib
+      - Pillow
+      - pydicom
+      - torch>=2.9
+      # MAISI (NV-Generate-CTMR) runtime, imported read-only by src/generate_slices.py
+      - monai>=1.5.0
+      - nibabel>=5.0.0
+      - einops>=0.7.0
+      - scikit-image>=0.20.0
+      - huggingface_hub>=0.20.0
+      - tqdm>=4.65.0
+      - PyYAML>=6.0
+      # Tests
+      - pytest

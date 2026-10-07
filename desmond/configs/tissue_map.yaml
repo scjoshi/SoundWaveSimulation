@@ -1,0 +1,77 @@
+# Phase 1 sound-speed mapping: anatomy -> IT'IS tissue properties (desmond/src/speed_map.py).
+#
+# Each body pixel is assigned one IT'IS tissue (names as in itis_tissue_properties.csv),
+# in this priority order:
+#   1. outside the body            -> coupling water (coupling_water_m_s)
+#   2. a MAISI bone label          -> bone, speed and density graded by HU (bone section)
+#   3. HU below -190 (gas)         -> the `gas` option
+#   4. HU in the fat range         -> classes.SAT / classes.VAT (fat wins over organ labels:
+#                                     fat-HU pixels inside an organ label are partial volume)
+#   5. a MAISI soft-organ label    -> labels.<id>
+#   6. otherwise                   -> classes.<ct_to_speed class> (muscle / visceral / bright)
+# Within each tissue, speed = IT'IS mean + texture, where texture follows the denoised HU
+# around that tissue's median HU in the slice. This removes contrast-agent offsets (the
+# median absorbs them) while keeping realistic within-organ variation.
+
+itis_table: itis_tissue_properties.csv        # relative to this file
+coupling_water_m_s: 1480.0                    # matches the advisor's --ct-padding-speed default
+coupling_water_density_kg_m3: 1000.0
+
+denoise_sigma_mm: 1.0      # Gaussian width; smoothing never crosses tissue boundaries
+
+texture:
+  enabled: true
+  slope_m_s_per_hu: 1.0    # ct_to_speed's hybrid mapping has 1.02-1.15 m/s per HU in soft tissue
+  clip_sd: 1.0             # texture clipped to +-clip_sd x the tissue's IT'IS standard deviation
+  default_sd_m_s: 15.0     # for tissues measured in a single study (no SD in IT'IS)
+
+gas: water                 # water | lumen | air
+gas_tissues:
+  water: Water             # stable in a constant-density solver; hides gas reflections
+  lumen: Small Intestine Lumen   # gas replaced by bowel contents
+  air: Air                 # physically right, but needs a variable-density solver
+                           # (343 m/s also gives about 1 point per wavelength at 250 kHz)
+
+bone:
+  # MAISI bone label ids: vertebrae (33-56, 127 = S1), ribs (63-86), humerus..hip (87-96),
+  # sacrum (97), skull (120), sternum (122)
+  label_ranges: [[33, 56], [63, 97]]
+  label_ids: [120, 122, 127]
+  # Speed/density are interpolated in HU between these anchors (clamped at the ends):
+  hu_anchors: [100, 200, 1000]
+  tissues: ["Bone Marrow (Red)", "Bone (Cancellous)", "Bone (Cortical)"]
+
+labels:                    # MAISI label id -> IT'IS tissue (configs/label_dict.json in the model repo)
+  1: Liver
+  3: Spleen
+  4: Pancreas
+  5: Kidney                # right kidney
+  14: Kidney               # left kidney
+  116: Kidney              # left kidney cyst (rare; kept as kidney)
+  117: Kidney              # right kidney cyst
+  6: Blood                 # aorta
+  7: Blood                 # inferior vena cava
+  17: Blood                # portal and splenic vein
+  25: Blood                # hepatic vessel
+  58: Blood                # left iliac artery
+  59: Blood                # right iliac artery
+  60: Blood                # left iliac vein
+  61: Blood                # right iliac vein
+  125: Blood               # superior vena cava
+  10: Gallbladder
+  12: Stomach Lumen        # IT'IS has no measured stomach-wall speed (placeholder 1500); use contents
+  13: Small Intestine Lumen  # duodenum
+  19: Small Intestine Lumen
+  62: Large Intestine Lumen  # colon
+  104: Muscle              # left autochthon (paraspinal)
+  105: Muscle              # right autochthon
+  106: Muscle              # left iliopsoas
+  107: Muscle              # right iliopsoas
+  121: Spinal Cord
+
+classes:                   # ct_to_speed tissue classes, for pixels without a specific organ label
+  SAT: Fat                 # IT'IS "Fat" (16 studies); IT'IS "SAT (Subcutaneous Fat)" is 1477 from 2 studies
+  VAT: Fat
+  MUSCLE: Muscle           # abdominal-wall muscle (MAISI does not label it)
+  VISCERAL: Connective Tissue   # unlabeled lean visceral tissue (mesentery, small vessels)
+  BONE: Connective Tissue  # >= 200 HU outside bone labels = contrast agent or calcification

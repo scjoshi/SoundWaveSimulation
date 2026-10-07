@@ -1,0 +1,3 @@
+# Generated data (synthetic CT, simulation outputs) and the MAISI mask cache (14 GB)
+data/generated/
+data/maisi_cache/

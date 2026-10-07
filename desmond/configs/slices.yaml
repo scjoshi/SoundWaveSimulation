@@ -1,0 +1,42 @@
+# Synthetic abdominal CT landmark slices from MAISI rflow-ct (see docs/model_notes.md).
+#   conda activate soundwave
+#   python desmond/src/generate_slices.py --config desmond/configs/slices.yaml
+# Relative paths are resolved against desmond/; model.network_config is
+# relative to model.repo. The model repo is only read, never written.
+
+model:
+  repo: /sci-it/projects/sarang-lab/desmond/nv-maisi/NV-Generate-CTMR
+  version: rflow-ct
+  network_config: configs/config_network_rflow.json
+  aux_cache: data/maisi_cache          # holds all_anatomy_size_conditions.json (fetched from HF if missing)
+
+generation:
+  mask_source: retrieved               # generated: Path A, mask diffusion (DDPM) from anatomy-size conditions
+                                       # retrieved: Path B, real training mask from MAISI's DB (+ +-1% zoom)
+  num_volumes: 10
+  base_seed: 0                         # volume i -> seed base_seed + i (+ 100000 per retry attempt)
+  output_size: [512, 512, 128]         # most common training FOV (chest+abdomen, 58.6% of data)
+  spacing: [0.781, 0.781, 2.981]       # mm, FOV 400 x 400 x 382 mm
+  num_inference_steps: 30              # rflow image diffusion
+  mask_generation_num_inference_steps: 1000   # mask diffusion is DDPM only; 1000 is required
+  autoencoder_sliding_window_infer_size: [80, 80, 32]   # 24G preset for 512x512x128
+  autoencoder_sliding_window_infer_overlap: 0.4
+  autoencoder_tp_num_splits: 2
+  exclude_tumors: true                 # force tumor slots of the anatomy condition to -1 (absent)
+  max_attempts: 8                      # retries on QC fail / landmark missing or truncated / tumor in slice;
+                                       # L3 is often cut off at the bottom of the mask model's chest-centred FOV
+
+retrieval:                             # Path B only (mask_source: retrieved)
+  body_region: [abdomen]               # masks must span these regions (MAISI find_masks filter)
+
+slices:
+  - name: L3_mid
+    label: vertebrae L3                # MAISI label name (configs/label_dict.json in model repo) -> 35
+    method: centroid                   # axial index at the label's z-centroid
+    require_full_extent: true          # retry if the label touches the first/last axial slice
+
+output:
+  dir: data/generated
+  run_name: l3_retrieved_seed0_n10
+  save_volumes: true                   # full image + unfiltered label NIfTI per sample
+  save_preview: true
