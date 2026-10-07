@@ -1,0 +1,11 @@
+sample,seed,mask_file,slice_index,pixel_spacing_mm,shape,body_area_cm2,fat_share,bone_share,mean_body_speed_itis_m_s
+sample_0000,0,img_404_label_wbdm.nii.gz,78,0.781,512x512,637.8,0.473,0.029,1515.9
+sample_0001,1,amos_0075_label_wbdm.nii.gz,82,0.781,512x512,396.7,0.165,0.06,1566.2
+sample_0002,100002,img_1549_label_wbdm.nii.gz,85,0.781,512x512,498.9,0.36,0.035,1537.2
+sample_0003,3,amos_0299_label_wbdm.nii.gz,72,0.781,512x512,573.3,0.6,0.034,1504.3
+sample_0004,4,img_332_label_wbdm.nii.gz,86,0.781,512x512,571.5,0.539,0.031,1513.7
+sample_0005,5,amos_0066_label_wbdm.nii.gz,79,0.781,512x512,611.0,0.514,0.031,1507.7
+sample_0006,6,amos_0023_label_wbdm.nii.gz,91,0.781,512x512,414.5,0.24,0.062,1572.4
+sample_0007,7,amos_0042_label_wbdm.nii.gz,83,0.781,512x512,505.4,0.399,0.036,1529.1
+sample_0008,8,amos_0087_label_wbdm.nii.gz,83,0.781,512x512,512.3,0.313,0.047,1544.0
+sample_0009,9,Case_00747_0000_label_wbdm.nii.gz,84,0.781,512x512,644.7,0.489,0.039,1522.5

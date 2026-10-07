@@ -4,6 +4,8 @@ Desmond's code, configs, data and notes for this repository. Everything here bui
 
 ## Start here
 
+**Resuming work? Read [HANDOFF.md](HANDOFF.md) first:** current state, key results, open questions, next steps. The shareable slices are in [data/ct_slices_l3_v1/](data/ct_slices_l3_v1/README.md).
+
 | Document | What it is for |
 | --- | --- |
 | [docs/learning_guide.md](docs/learning_guide.md) | The topic from the ground up: ultrasound tomography, wave simulation, FWI, the TFNO plan, a map of the codebase, hands-on exercises |
@@ -11,6 +13,7 @@ Desmond's code, configs, data and notes for this repository. Everything here bui
 | [docs/simulation_pipeline.md](docs/simulation_pipeline.md) | How the synthetic CT samples were made and simulated, with interpretation figures |
 | [docs/model_notes.md](docs/model_notes.md) | Reference for the MAISI (NV-Generate-CTMR) CT generation model |
 | [docs/phase1_speed_maps.md](docs/phase1_speed_maps.md) | Phase 1: IT'IS-anchored sound-speed maps, validation, and their effect on simulations |
+| [docs/phase2_numerics.md](docs/phase2_numerics.md) | Phase 2: simulator accuracy (dispersion, convergence, reciprocity, aliasing, boundaries) and the error budget |
 | [docs/decisions.md](docs/decisions.md) | Decision log: goal, baseline geometry, modelling choices, and why |
 | [docs/upstream_suggestions.md](docs/upstream_suggestions.md) | Small fixes proposed for the advisor's shared code (not applied) |
 
@@ -19,6 +22,7 @@ Desmond's code, configs, data and notes for this repository. Everything here bui
 ```text
 desmond/
 ├── README.md
+├── HANDOFF.md                 current state and next steps (update every session)
 ├── environment.yml            conda env "soundwave" (also runs the advisor's scripts)
 ├── configs/
 │   ├── slices.yaml            synthetic-CT generation settings
@@ -30,10 +34,16 @@ desmond/
 │   ├── capture_inversion.py   run the advisor's inversion scripts unchanged and save their maps
 │   ├── make_simulation_figures.py   all figures/metrics in docs/simulation_pipeline.md
 │   ├── speed_map.py           Phase 1: CT slice + labels -> IT'IS-anchored speed/density maps
-│   └── validate_speed_maps.py Phase 1: per-tissue validation + forward-effect figures
+│   ├── validate_speed_maps.py Phase 1: per-tissue validation + forward-effect figures
+│   ├── phase2_numerics.py     Phase 2: numerical-accuracy experiments on the advisor's GPU solver
+│   ├── make_phase2_figures.py Phase 2: figures for docs/phase2_numerics.md
+│   └── package_slices.py      copy a run's slices into a small shareable dataset
 ├── tests/                     unit tests + GPU smoke tests for src/
 ├── docs/                      the documents above; figures/ holds their images
-└── data/                      gitignored: generated samples, simulation outputs, MAISI mask cache (14 GB)
+└── data/
+    ├── ct_slices_l3_v1/       tracked: 10 synthetic L3 slices + sound-speed maps (21 MB)
+    ├── generated/             gitignored: full runs, volumes, simulation outputs
+    └── maisi_cache/           gitignored: MAISI mask database (14 GB)
 ```
 
 ## Conventions

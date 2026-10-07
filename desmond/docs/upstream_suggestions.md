@@ -60,4 +60,18 @@ and add `outputs/` to `.gitignore`.
 
 ## 4. Points per wavelength and element spacing (for discussion, not a code bug)
 
-At the 250 kHz top of the chirp, the current grids give 4–7 grid points per wavelength in fat. A second-order FDTD scheme usually wants 10 or more. The 256-element ring's pitch is 1.25–1.6× half a wavelength, i.e. spatially aliased. Details and the planned convergence test: `desmond/docs/critical_review.md`, section 5 and Phase 2.
+At the 250 kHz top of the chirp, the current grids give 4–7 grid points per wavelength in fat. A second-order FDTD scheme usually wants 10 or more. The 256-element ring's pitch is 1.25–1.6× half a wavelength, i.e. spatially aliased. **Now measured** (`desmond/docs/phase2_numerics.md`): on the default grid, body-minus-water delays are off by a median 3 % (worst 16 %) and waveforms by about 110 %. A 4× finer grid brings the delays to 0.7 % (worst 2.4 %). 256 elements alias above about 190 kHz on a 150 mm ring.
+
+## 5. Point source snaps to the nearest grid node (breaks reciprocity)
+
+**Symptom.** Swapping transmitter and receiver changes the recorded trace by a median 26 % (up to 58 %, up to 0.53 µs timing shift). Measured in `desmond/docs/phase2_numerics.md`.
+
+**Cause.** `RingArray.inject_rows_cols` rounds the transmitter to the nearest node, while `record` samples receivers bilinearly. The discrete source and receiver operators are therefore not adjoint.
+
+**Fix.** Inject with the same bilinear weights `RingArray._init_bilinear` already computes, i.e. add `w * pulse[n]` to the four surrounding nodes. `TorchFDTD2D` already supports this through its field-source path, `source_mode = 2`. With that change, reciprocity holds to machine precision (verified).
+
+## 6. First-order Mur boundary eight cells outside the ring
+
+**Symptom.** Compared with a domain padded by 128 cells, traces differ by 7.5 % (median) of their energy, starting around 209 µs. First arrivals are unaffected; late arrivals used by FWI are not.
+
+**Options.** A larger default `--ct-edge-margin`, truncating the misfit window before reflections return, or a PML.

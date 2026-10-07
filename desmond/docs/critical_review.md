@@ -161,11 +161,11 @@ The phases are ordered so that each one de-risks the next. Each lists its exit c
 
 ### Phase 2: Verify the forward simulator
 
-- [ ] **Grid convergence.** Run the same medium at h, h/2 and h/4. Measure first-arrival time and phase error against PPW, then choose the grid and band.
-- [ ] **Reciprocity.** Check d_ij(t) ≈ d_ji(t), an acceptance criterion in the advisor's plan.
-- [ ] **Aliasing.** Compare 256 vs 512 elements at the chosen band.
-- [ ] **Boundary reflections.** Measure them at the chosen margin.
-- **Exit:** a numerical error budget, e.g. arrival-time error below 1 % of the 9–22 µs body signal.
+- [x] **Grid convergence.** Run the same medium at h, h/2 and h/4. Measure first-arrival time and phase error against PPW, then choose the grid and band. *Done with an 8× reference and an exact water solution: the default grid gives median 3 % (worst 16 %) delay error; 4× gives 0.7 % (worst 2.4 %).*
+- [x] **Reciprocity.** Check d_ij(t) ≈ d_ji(t), an acceptance criterion in the advisor's plan. *Broken by nearest-node source snapping (26 % median); exact with bilinear source injection.*
+- [x] **Aliasing.** Compare 256 vs 512 elements at the chosen band. *256 elements alias above about 190 kHz at R = 150 mm (about 150 kHz at 190 mm); 512 cover the full band.*
+- [x] **Boundary reflections.** Measure them at the chosen margin. *7.5 % median trace energy from about 209 µs; first arrivals unaffected.*
+- **Exit:** a numerical error budget, e.g. arrival-time error below 1 % of the 9–22 µs body signal. **Done 2026-10-07** (`phase2_numerics.md`): met in the median on the 4× grid (0.7 %), not on the default grid; configuration choices are pending with the advisor (`decisions.md`).
 
 ### Phase 3: One inversion that works (single slice, sample 1)
 

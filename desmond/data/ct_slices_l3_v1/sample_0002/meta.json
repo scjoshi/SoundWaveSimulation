@@ -1,0 +1,96 @@
+{
+  "sample_index": 2,
+  "seed": 100002,
+  "base_seed": 0,
+  "attempt": 1,
+  "model_version": "rflow-ct",
+  "model_repo": "/sci-it/projects/sarang-lab/desmond/nv-maisi/NV-Generate-CTMR",
+  "model_commit": "da438fec6484cdb6f421f8c7051d954ebefff730",
+  "model_repo_dirty": false,
+  "checkpoints": {
+    "autoencoder_v1.pt": 83831868,
+    "diff_unet_3d_rflow-ct.pt": 2166600232,
+    "controlnet_3d_rflow-ct.pt": 288255799,
+    "mask_generation_autoencoder.pt": 21072774,
+    "mask_generation_diffusion_unet.pt": 788941780
+  },
+  "this_repo_commit": "0007cc814dd655c801c8bead96e5b86797ba3607",
+  "this_repo_dirty": true,
+  "slices": [
+    {
+      "name": "L3_mid",
+      "landmark": "vertebrae L3",
+      "label_id": 35,
+      "method": "centroid",
+      "slice_index": 85,
+      "slice_z_mm": 253.385,
+      "label_z_range": [
+        75,
+        91
+      ],
+      "labelled_fov_z_range": [
+        0,
+        127
+      ],
+      "label_z_extent_mm": 50.677,
+      "hu_file": "L3_mid_hu.npy",
+      "label_file": "L3_mid_label.npy",
+      "shape": [
+        512,
+        512
+      ],
+      "spacing_mm": [
+        0.781,
+        0.781
+      ]
+    }
+  ],
+  "volume_shape": [
+    512,
+    512,
+    128
+  ],
+  "volume_spacing_xyz_mm": [
+    0.781,
+    0.781,
+    2.981
+  ],
+  "orientation": "Slices: rows anterior->posterior, columns patient right->left (radiological, DICOM-like); spacing_mm is (row, col). Volumes: RAS voxel axes (x->right, y->anterior, z->superior), slice = volume[:, :, slice_index].",
+  "hu_clip": [
+    -1000,
+    1000
+  ],
+  "qc_passed": true,
+  "mask_source": "retrieved",
+  "retrieved_mask": {
+    "file": "img_1549_label_wbdm.nii.gz",
+    "source_dim": [
+      512,
+      512,
+      512
+    ],
+    "source_spacing": [
+      0.78125,
+      0.78125,
+      0.7593750357627869
+    ],
+    "pool_index": 2,
+    "pool_size": 22,
+    "resampled": true,
+    "body_region": [
+      "abdomen"
+    ]
+  },
+  "num_inference_steps": 30,
+  "mask_generation_num_inference_steps": 1000,
+  "versions": {
+    "torch": "2.14.1+cu130",
+    "monai": "1.6.1",
+    "numpy": "2.5.3"
+  },
+  "generation_seconds": 17.1,
+  "created": "2026-10-06T00:18:16",
+  "rejected_attempts": [
+    "seed 2: MAISI organ-HU quality check failed"
+  ]
+}

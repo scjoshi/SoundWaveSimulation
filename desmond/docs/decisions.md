@@ -2,6 +2,19 @@
 
 *Newest first. Each entry: what was decided, why, and what would reopen it.*
 
+## 2026-10-07: Phase 2 numerical findings (configuration proposed, pending the advisor)
+
+Evidence: `phase2_numerics.md`.
+
+| Proposal | Why | Status |
+| --- | --- | --- |
+| Generate simulated measurements on a **4× grid** (about 0.2 mm) | Default grid: body-delay error median 3 %, worst 16 %; waveforms about 110 % off. 4×: median 0.7 %, worst 2.4 %, waveforms 7 % | Proposed |
+| Invert on **2×** (full band), or on 1× with the band capped near 150 kHz | At least 10–15 points per wavelength in fat for the inversion grid; a different grid from the data also avoids the inverse crime | Proposed |
+| **Bilinear source injection** | Nearest-node snapping breaks reciprocity (26 % median); bilinear injection makes it exact | Proposed upstream (`upstream_suggestions.md`, fix 5); `desmond/src/phase2_numerics.py` already uses it |
+| **512 elements**, or cap the band at about 150–190 kHz | 256 elements alias above about 190 kHz at R = 150 mm (about 150 kHz at R = 190 mm) | Needs the advisor (hardware realism) |
+| Truncate traces before boundary reflections (about 200 µs here), or widen the margin or use a PML for FWI | Mur boundary returns 7.5 % of trace energy from about 209 µs | Proposed |
+| Travel-time results so far (Phase 1) stand | The default grid adds a consistent +5 to +8 m/s; the fat correlation is unchanged (r = −0.97) | — |
+
 ## 2026-10-07: Phase 1 sound-speed modelling choices
 
 | Decision | Why | Reopen if |
