@@ -1,0 +1,338 @@
+Stage 1/3: 101 x 101, 10–50 kHz, 128 elements
+  Precomputing observed traces (128 shots per GPU batch)...
+  Gradient: 32 shots in batches of 32; wavefield every 4 step(s) as float16
+  Adam iter   1  J = 1.461903e+05  lr = 1.000e-08  |g| = 1.2870e+11
+  Adam iter   2  J = 1.055242e+05  lr = 1.000e-08  |g| = 9.0427e+10
+  Adam iter   3  J = 8.685961e+04  lr = 1.000e-08  |g| = 9.3479e+10
+  Adam iter   4  J = 7.869038e+04  lr = 1.000e-08  |g| = 9.7015e+10
+  Adam iter   5  J = 6.261407e+04  lr = 1.000e-08  |g| = 8.9838e+10
+  Adam iter   6  J = 4.886432e+04  lr = 1.000e-08  |g| = 7.4490e+10
+  Adam iter   7  J = 3.836041e+04  lr = 1.000e-08  |g| = 5.1903e+10
+  Adam iter   8  J = 3.687242e+04  lr = 1.000e-08  |g| = 4.7508e+10
+  Adam iter   9  J = 4.136053e+04  lr = 1.000e-08  |g| = 6.0262e+10
+  Adam iter  10  J = 4.449148e+04  lr = 1.000e-08  |g| = 7.1641e+10
+  Adam iter  11  J = 4.384923e+04  lr = 1.000e-08  |g| = 7.5591e+10
+  Adam iter  12  J = 3.966423e+04  lr = 1.000e-08  |g| = 7.4205e+10
+  Adam iter  13  J = 3.232362e+04  lr = 1.000e-08  |g| = 5.8527e+10
+  Adam iter  14  J = 2.507560e+04  lr = 1.000e-08  |g| = 4.5606e+10
+  Adam iter  15  J = 2.060427e+04  lr = 1.000e-08  |g| = 3.8915e+10
+  Adam iter  16  J = 1.725619e+04  lr = 1.000e-08  |g| = 3.5351e+10
+  Adam iter  17  J = 1.674891e+04  lr = 1.000e-08  |g| = 4.2456e+10
+  Adam iter  18  J = 1.542180e+04  lr = 1.000e-08  |g| = 4.1969e+10
+  Adam iter  19  J = 1.384552e+04  lr = 1.000e-08  |g| = 3.7970e+10
+  Adam iter  20  J = 1.198056e+04  lr = 1.000e-08  |g| = 3.3528e+10
+  Adam iter  21  J = 1.175101e+04  lr = 1.000e-08  |g| = 2.9642e+10
+  Adam iter  22  J = 1.143326e+04  lr = 1.000e-08  |g| = 2.8925e+10
+  Adam iter  23  J = 1.118615e+04  lr = 1.000e-08  |g| = 3.1948e+10
+  Adam iter  24  J = 1.134835e+04  lr = 1.000e-08  |g| = 3.4578e+10
+  Adam iter  25  J = 1.023018e+04  lr = 1.000e-08  |g| = 3.4339e+10
+  Adam iter  26  J = 8.439473e+03  lr = 1.000e-08  |g| = 3.0407e+10
+  Adam iter  27  J = 6.668491e+03  lr = 1.000e-08  |g| = 2.4268e+10
+  Adam iter  28  J = 4.972794e+03  lr = 1.000e-08  |g| = 1.6542e+10
+  Adam iter  29  J = 4.589610e+03  lr = 1.000e-08  |g| = 1.5732e+10
+  Adam iter  30  J = 4.477625e+03  lr = 1.000e-08  |g| = 1.7746e+10
+  Adam iter  31  J = 4.696985e+03  lr = 1.000e-08  |g| = 1.9835e+10
+  Adam iter  32  J = 4.872011e+03  lr = 1.000e-08  |g| = 2.0946e+10
+  Adam iter  33  J = 4.640430e+03  lr = 1.000e-08  |g| = 1.8089e+10
+  Adam iter  34  J = 4.529104e+03  lr = 1.000e-08  |g| = 1.6762e+10
+  Adam iter  35  J = 4.105391e+03  lr = 1.000e-08  |g| = 1.5421e+10
+  Adam iter  36  J = 4.223802e+03  lr = 1.000e-08  |g| = 1.9065e+10
+  Adam iter  37  J = 4.077401e+03  lr = 1.000e-08  |g| = 2.0121e+10
+  Adam iter  38  J = 3.655643e+03  lr = 1.000e-08  |g| = 1.7131e+10
+  Adam iter  39  J = 3.097514e+03  lr = 1.000e-08  |g| = 1.3703e+10
+  Adam iter  40  J = 2.706653e+03  lr = 1.000e-08  |g| = 8.9181e+09
+  Adam iter  41  J = 2.526196e+03  lr = 1.000e-08  |g| = 6.8929e+09
+  Adam iter  42  J = 2.679683e+03  lr = 1.000e-08  |g| = 8.9828e+09
+  Adam iter  43  J = 2.795756e+03  lr = 1.000e-08  |g| = 1.2167e+10
+  Adam iter  44  J = 2.951095e+03  lr = 1.000e-08  |g| = 1.4962e+10
+  Adam iter  45  J = 2.902616e+03  lr = 1.000e-08  |g| = 1.3155e+10
+  Adam iter  46  J = 2.699308e+03  lr = 1.000e-08  |g| = 1.0744e+10
+  Adam iter  47  J = 2.478073e+03  lr = 1.000e-08  |g| = 8.7060e+09
+  Adam iter  48  J = 2.384311e+03  lr = 1.000e-08  |g| = 8.0016e+09
+  Adam iter  49  J = 2.274047e+03  lr = 1.000e-08  |g| = 8.5807e+09
+  Adam iter  50  J = 2.157338e+03  lr = 1.000e-08  |g| = 7.4739e+09
+  Adam iter  51  J = 2.087532e+03  lr = 1.000e-08  |g| = 7.2286e+09
+  Adam iter  52  J = 2.053991e+03  lr = 1.000e-08  |g| = 5.6243e+09
+  Adam iter  53  J = 2.033425e+03  lr = 1.000e-08  |g| = 5.3835e+09
+  Adam iter  54  J = 2.094676e+03  lr = 1.000e-08  |g| = 6.1618e+09
+  Adam iter  55  J = 2.109639e+03  lr = 1.000e-08  |g| = 7.0852e+09
+  Adam iter  56  J = 2.080028e+03  lr = 1.000e-08  |g| = 7.2983e+09
+  Adam iter  57  J = 1.973265e+03  lr = 1.000e-08  |g| = 6.0331e+09
+  Adam iter  58  J = 1.906881e+03  lr = 1.000e-08  |g| = 4.2974e+09
+  Adam iter  59  J = 1.879305e+03  lr = 1.000e-08  |g| = 4.1839e+09
+  Adam iter  60  J = 1.859735e+03  lr = 1.000e-08  |g| = 4.3056e+09
+  Adam iter  61  J = 1.779097e+03  lr = 1.000e-08  |g| = 4.1053e+09
+  Adam iter  62  J = 1.831142e+03  lr = 1.000e-08  |g| = 4.1767e+09
+  Adam iter  63  J = 1.835661e+03  lr = 1.000e-08  |g| = 3.9047e+09
+  Adam iter  64  J = 1.761183e+03  lr = 1.000e-08  |g| = 3.4961e+09
+  Adam iter  65  J = 1.789632e+03  lr = 1.000e-08  |g| = 4.0375e+09
+  Adam iter  66  J = 1.780207e+03  lr = 1.000e-08  |g| = 3.5351e+09
+  Adam iter  67  J = 1.770475e+03  lr = 1.000e-08  |g| = 3.2126e+09
+  Adam iter  68  J = 1.699138e+03  lr = 1.000e-08  |g| = 3.0706e+09
+  Adam iter  69  J = 1.709674e+03  lr = 1.000e-08  |g| = 2.5824e+09
+  Adam iter  70  J = 1.745019e+03  lr = 1.000e-08  |g| = 2.5884e+09
+  Adam iter  71  J = 1.691877e+03  lr = 1.000e-08  |g| = 2.4146e+09
+  Adam iter  72  J = 1.736645e+03  lr = 1.000e-08  |g| = 2.7156e+09
+  Adam iter  73  J = 1.676477e+03  lr = 1.000e-08  |g| = 2.3187e+09
+  Adam iter  74  J = 1.704513e+03  lr = 1.000e-08  |g| = 2.6033e+09
+  Adam iter  75  J = 1.707517e+03  lr = 1.000e-08  |g| = 2.2959e+09
+  Adam iter  76  J = 1.707658e+03  lr = 1.000e-08  |g| = 2.2039e+09
+  Adam iter  77  J = 1.693874e+03  lr = 1.000e-08  |g| = 2.2213e+09
+  Adam iter  78  J = 1.636267e+03  lr = 1.000e-08  |g| = 1.5882e+09
+  Adam iter  79  J = 1.644153e+03  lr = 1.000e-08  |g| = 1.2314e+09
+  Adam iter  80  J = 1.665301e+03  lr = 1.000e-08  |g| = 1.1440e+09
+  Adam iter  81  J = 1.674267e+03  lr = 1.000e-08  |g| = 1.4464e+09
+  Adam iter  82  J = 1.702975e+03  lr = 1.000e-08  |g| = 1.7658e+09
+  Adam iter  83  J = 1.695218e+03  lr = 1.000e-08  |g| = 1.9026e+09
+  Adam iter  84  J = 1.689317e+03  lr = 1.000e-08  |g| = 1.4038e+09
+  Adam iter  85  J = 1.669199e+03  lr = 1.000e-08  |g| = 1.2435e+09
+  Adam iter  86  J = 1.668625e+03  lr = 1.000e-08  |g| = 1.0961e+09
+  Adam iter  87  J = 1.669489e+03  lr = 1.000e-08  |g| = 1.0410e+09
+  Adam iter  88  J = 1.664860e+03  lr = 1.000e-08  |g| = 1.0085e+09
+  Adam iter  89  J = 1.658862e+03  lr = 1.000e-08  |g| = 1.0623e+09
+  Adam iter  90  J = 1.670793e+03  lr = 1.000e-08  |g| = 9.7993e+08
+  Adam iter  91  J = 1.662010e+03  lr = 1.000e-08  |g| = 1.0530e+09
+  Adam iter  92  J = 1.633610e+03  lr = 1.000e-08  |g| = 1.2961e+09
+  Adam iter  93  J = 1.638952e+03  lr = 1.000e-08  |g| = 9.5980e+08
+  Adam iter  94  J = 1.637981e+03  lr = 1.000e-08  |g| = 9.2621e+08
+  Adam iter  95  J = 1.628768e+03  lr = 1.000e-08  |g| = 7.8744e+08
+  Adam iter  96  J = 1.621799e+03  lr = 1.000e-08  |g| = 7.2735e+08
+  Adam iter  97  J = 1.648621e+03  lr = 1.000e-08  |g| = 8.4757e+08
+  Adam iter  98  J = 1.698822e+03  lr = 1.000e-08  |g| = 8.0066e+08
+  Adam iter  99  J = 1.648434e+03  lr = 1.000e-08  |g| = 7.1322e+08
+  Adam iter 100  J = 1.662526e+03  lr = 1.000e-08  |g| = 7.1850e+08
+  Adam iter 101  J = 1.673725e+03  lr = 1.000e-08  |g| = 8.1683e+08
+  Adam iter 102  J = 1.647669e+03  lr = 1.000e-08  |g| = 7.4238e+08
+  Adam iter 103  J = 1.644536e+03  lr = 1.000e-08  |g| = 6.3864e+08
+  Adam iter 104  J = 1.656745e+03  lr = 1.000e-08  |g| = 6.4277e+08
+  Adam iter 105  J = 1.667984e+03  lr = 1.000e-08  |g| = 5.7472e+08
+  Adam iter 106  J = 1.629822e+03  lr = 1.000e-08  |g| = 5.0970e+08
+  Adam iter 107  J = 1.667109e+03  lr = 1.000e-08  |g| = 6.8496e+08
+  Adam iter 108  J = 1.671211e+03  lr = 1.000e-08  |g| = 6.6092e+08
+  Adam iter 109  J = 1.631059e+03  lr = 1.000e-08  |g| = 6.2866e+08
+  Adam iter 110  J = 1.633127e+03  lr = 1.000e-08  |g| = 6.4478e+08
+  Adam iter 111  J = 1.651397e+03  lr = 1.000e-08  |g| = 6.7565e+08
+  Adam iter 112  J = 1.665233e+03  lr = 1.000e-08  |g| = 6.7097e+08
+  Adam iter 113  J = 1.664164e+03  lr = 1.000e-08  |g| = 4.4271e+08
+  Adam iter 114  J = 1.641699e+03  lr = 1.000e-08  |g| = 5.1192e+08
+  Adam iter 115  J = 1.626174e+03  lr = 1.000e-08  |g| = 6.1125e+08
+  Adam iter 116  J = 1.656504e+03  lr = 1.000e-08  |g| = 6.6095e+08
+  Adam iter 117  J = 1.655954e+03  lr = 1.000e-08  |g| = 5.7855e+08
+  Adam iter 118  J = 1.622823e+03  lr = 1.000e-08  |g| = 5.1605e+08
+  Adam iter 119  J = 1.659686e+03  lr = 1.000e-08  |g| = 5.0672e+08
+  Adam iter 120  J = 1.645461e+03  lr = 1.000e-08  |g| = 6.0594e+08
+  Adam iter 121  J = 1.674288e+03  lr = 1.000e-08  |g| = 5.5111e+08
+  Adam iter 122  J = 1.650504e+03  lr = 1.000e-08  |g| = 5.8707e+08
+  Adam iter 123  J = 1.632209e+03  lr = 1.000e-08  |g| = 5.5384e+08
+  Adam iter 124  J = 1.646190e+03  lr = 1.000e-08  |g| = 5.2093e+08
+  Adam iter 125  J = 1.646564e+03  lr = 1.000e-08  |g| = 6.3796e+08
+  Adam iter 126  J = 1.648061e+03  lr = 1.000e-08  |g| = 4.4268e+08
+  Adam iter 127  J = 1.655661e+03  lr = 1.000e-08  |g| = 5.3627e+08
+  Adam iter 128  J = 1.643718e+03  lr = 1.000e-08  |g| = 5.3301e+08
+  Adam iter 129  J = 1.616530e+03  lr = 1.000e-08  |g| = 4.8307e+08
+  Adam iter 130  J = 1.622795e+03  lr = 1.000e-08  |g| = 4.9003e+08
+  Adam iter 131  J = 1.654690e+03  lr = 1.000e-08  |g| = 5.1093e+08
+  Adam iter 132  J = 1.652629e+03  lr = 1.000e-08  |g| = 6.3470e+08
+  Adam iter 133  J = 1.618112e+03  lr = 1.000e-08  |g| = 4.3883e+08
+  Adam iter 134  J = 1.650810e+03  lr = 1.000e-08  |g| = 4.2925e+08
+  Adam iter 135  J = 1.628386e+03  lr = 1.000e-08  |g| = 4.6283e+08
+  Adam iter 136  J = 1.645188e+03  lr = 1.000e-08  |g| = 5.8598e+08
+  Adam iter 137  J = 1.629956e+03  lr = 1.000e-08  |g| = 4.5798e+08
+  Adam iter 138  J = 1.648165e+03  lr = 1.000e-08  |g| = 5.2306e+08
+  Adam iter 139  J = 1.632538e+03  lr = 1.000e-08  |g| = 4.2739e+08
+  Adam iter 140  J = 1.678447e+03  lr = 1.000e-08  |g| = 5.0178e+08
+  Adam iter 141  J = 1.637470e+03  lr = 1.000e-08  |g| = 5.7826e+08
+  Adam iter 142  J = 1.660075e+03  lr = 1.000e-08  |g| = 4.2881e+08
+  Adam iter 143  J = 1.654060e+03  lr = 1.000e-08  |g| = 5.0849e+08
+  Adam iter 144  J = 1.653659e+03  lr = 1.000e-08  |g| = 5.8947e+08
+  Adam iter 145  J = 1.631783e+03  lr = 1.000e-08  |g| = 5.1372e+08
+  Adam iter 146  J = 1.641834e+03  lr = 1.000e-08  |g| = 5.4796e+08
+  Adam iter 147  J = 1.651810e+03  lr = 1.000e-08  |g| = 4.4698e+08
+  Adam iter 148  J = 1.663552e+03  lr = 1.000e-08  |g| = 4.2043e+08
+  Adam iter 149  J = 1.682851e+03  lr = 1.000e-08  |g| = 5.1572e+08
+  Adam iter 150  J = 1.627771e+03  lr = 1.000e-08  |g| = 5.2497e+08
+  Adam iter 151  J = 1.643832e+03  lr = 1.000e-08  |g| = 4.5828e+08
+  Adam iter 152  J = 1.642844e+03  lr = 1.000e-08  |g| = 5.6433e+08
+  Adam iter 153  J = 1.617866e+03  lr = 1.000e-08  |g| = 5.0796e+08
+  Adam iter 154  J = 1.651420e+03  lr = 1.000e-08  |g| = 5.1331e+08
+  Adam iter 155  J = 1.650303e+03  lr = 1.000e-08  |g| = 4.0652e+08
+  Adam iter 156  J = 1.624412e+03  lr = 1.000e-08  |g| = 4.5616e+08
+  Adam iter 157  J = 1.617912e+03  lr = 1.000e-08  |g| = 6.3651e+08
+  Adam iter 158  J = 1.633367e+03  lr = 1.000e-08  |g| = 5.5949e+08
+  Adam iter 159  J = 1.636423e+03  lr = 1.000e-08  |g| = 4.8801e+08
+  Adam iter 160  J = 1.670452e+03  lr = 1.000e-08  |g| = 4.5738e+08
+  Adam iter 161  J = 1.651426e+03  lr = 1.000e-08  |g| = 5.5305e+08
+  Adam iter 162  J = 1.637908e+03  lr = 1.000e-08  |g| = 4.4096e+08
+  Adam iter 163  J = 1.645577e+03  lr = 1.000e-08  |g| = 4.4481e+08
+  Adam iter 164  J = 1.693524e+03  lr = 1.000e-08  |g| = 6.3866e+08
+  Adam iter 165  J = 1.635559e+03  lr = 1.000e-08  |g| = 4.9061e+08
+  Adam iter 166  J = 1.621185e+03  lr = 1.000e-08  |g| = 5.6426e+08
+  Adam iter 167  J = 1.601868e+03  lr = 1.000e-08  |g| = 4.7759e+08
+  Adam iter 168  J = 1.645625e+03  lr = 1.000e-08  |g| = 5.0841e+08
+  Adam iter 169  J = 1.641885e+03  lr = 1.000e-08  |g| = 4.0824e+08
+  Adam iter 170  J = 1.630100e+03  lr = 1.000e-08  |g| = 5.5292e+08
+  Adam iter 171  J = 1.645360e+03  lr = 1.000e-08  |g| = 4.6063e+08
+  Adam iter 172  J = 1.631970e+03  lr = 1.000e-08  |g| = 3.7633e+08
+  Adam iter 173  J = 1.621902e+03  lr = 1.000e-08  |g| = 5.1127e+08
+  Adam iter 174  J = 1.658047e+03  lr = 1.000e-08  |g| = 5.4619e+08
+  Adam iter 175  J = 1.610184e+03  lr = 1.000e-08  |g| = 4.5154e+08
+  Adam iter 176  J = 1.656915e+03  lr = 1.000e-08  |g| = 3.9772e+08
+  Adam iter 177  J = 1.655769e+03  lr = 1.000e-08  |g| = 4.7292e+08
+  Adam iter 178  J = 1.671803e+03  lr = 1.000e-08  |g| = 5.6455e+08
+  Adam iter 179  J = 1.637432e+03  lr = 1.000e-08  |g| = 4.9532e+08
+  Adam iter 180  J = 1.662805e+03  lr = 1.000e-08  |g| = 4.2275e+08
+  Adam iter 181  J = 1.639586e+03  lr = 1.000e-08  |g| = 4.5883e+08
+  Adam iter 182  J = 1.632403e+03  lr = 1.000e-08  |g| = 6.3080e+08
+  Adam iter 183  J = 1.628692e+03  lr = 1.000e-08  |g| = 4.6333e+08
+  Adam iter 184  J = 1.679415e+03  lr = 1.000e-08  |g| = 4.9207e+08
+  Adam iter 185  J = 1.646400e+03  lr = 1.000e-08  |g| = 5.4421e+08
+  Adam iter 186  J = 1.620598e+03  lr = 1.000e-08  |g| = 4.4916e+08
+  Adam iter 187  J = 1.666420e+03  lr = 1.000e-08  |g| = 5.7464e+08
+  Adam iter 188  J = 1.639198e+03  lr = 1.000e-08  |g| = 5.1266e+08
+  Adam iter 189  J = 1.628168e+03  lr = 1.000e-08  |g| = 3.9893e+08
+  Adam iter 190  J = 1.637718e+03  lr = 1.000e-08  |g| = 5.5292e+08
+  Adam iter 191  J = 1.628258e+03  lr = 1.000e-08  |g| = 4.3398e+08
+  Adam iter 192  J = 1.671993e+03  lr = 1.000e-08  |g| = 6.0474e+08
+  Adam iter 193  J = 1.681227e+03  lr = 1.000e-08  |g| = 4.8977e+08
+  Adam iter 194  J = 1.651997e+03  lr = 1.000e-08  |g| = 4.9425e+08
+  Adam iter 195  J = 1.630540e+03  lr = 1.000e-08  |g| = 4.0825e+08
+  Adam iter 196  J = 1.635383e+03  lr = 1.000e-08  |g| = 5.0012e+08
+  Adam iter 197  J = 1.663937e+03  lr = 1.000e-08  |g| = 4.9487e+08
+  Adam iter 198  J = 1.646708e+03  lr = 1.000e-08  |g| = 4.1032e+08
+  Adam iter 199  J = 1.625992e+03  lr = 1.000e-08  |g| = 5.2647e+08
+  Adam iter 200  J = 1.640222e+03  lr = 1.000e-08  |g| = 3.8531e+08
+Stage 2/3: 201 x 201, 50–125 kHz, 128 elements
+  Precomputing observed traces (128 shots per GPU batch)...
+  Gradient: 32 shots in batches of 32; wavefield every 4 step(s) as float16
+  Adam iter   1  J = 7.445515e+04  lr = 4.000e-09  |g| = 3.8218e+10
+  Adam iter   2  J = 7.140733e+04  lr = 4.000e-09  |g| = 3.7712e+10
+  Adam iter   3  J = 5.450560e+04  lr = 4.000e-09  |g| = 2.8030e+10
+  Adam iter   4  J = 5.586368e+04  lr = 4.000e-09  |g| = 2.7576e+10
+  Adam iter   5  J = 5.689890e+04  lr = 4.000e-09  |g| = 3.5271e+10
+  Adam iter   6  J = 5.188803e+04  lr = 4.000e-09  |g| = 3.2282e+10
+  Adam iter   7  J = 4.825289e+04  lr = 4.000e-09  |g| = 2.5553e+10
+  Adam iter   8  J = 4.126764e+04  lr = 4.000e-09  |g| = 2.0798e+10
+  Adam iter   9  J = 4.084540e+04  lr = 4.000e-09  |g| = 2.3869e+10
+  Adam iter  10  J = 3.683641e+04  lr = 4.000e-09  |g| = 2.5273e+10
+  Adam iter  11  J = 3.403411e+04  lr = 4.000e-09  |g| = 2.2344e+10
+  Adam iter  12  J = 3.280436e+04  lr = 4.000e-09  |g| = 1.8832e+10
+  Adam iter  13  J = 3.089588e+04  lr = 4.000e-09  |g| = 1.8666e+10
+  Adam iter  14  J = 2.911474e+04  lr = 4.000e-09  |g| = 2.0456e+10
+  Adam iter  15  J = 2.784992e+04  lr = 4.000e-09  |g| = 1.9275e+10
+  Adam iter  16  J = 2.606432e+04  lr = 4.000e-09  |g| = 1.6726e+10
+  Adam iter  17  J = 2.729961e+04  lr = 4.000e-09  |g| = 1.6143e+10
+  Adam iter  18  J = 2.365059e+04  lr = 4.000e-09  |g| = 1.6498e+10
+  Adam iter  19  J = 2.402098e+04  lr = 4.000e-09  |g| = 1.7453e+10
+  Adam iter  20  J = 2.094817e+04  lr = 4.000e-09  |g| = 1.5212e+10
+  Adam iter  21  J = 2.181086e+04  lr = 4.000e-09  |g| = 1.3492e+10
+  Adam iter  22  J = 1.937449e+04  lr = 4.000e-09  |g| = 1.3366e+10
+  Adam iter  23  J = 2.014940e+04  lr = 4.000e-09  |g| = 1.4975e+10
+  Adam iter  24  J = 1.833089e+04  lr = 4.000e-09  |g| = 1.3969e+10
+  Adam iter  25  J = 1.835141e+04  lr = 4.000e-09  |g| = 1.2333e+10
+  Adam iter  26  J = 1.724708e+04  lr = 4.000e-09  |g| = 1.1726e+10
+  Adam iter  27  J = 1.650927e+04  lr = 4.000e-09  |g| = 1.4147e+10
+  Adam iter  28  J = 1.653369e+04  lr = 4.000e-09  |g| = 1.2218e+10
+  Adam iter  29  J = 1.577093e+04  lr = 4.000e-09  |g| = 1.0747e+10
+  Adam iter  30  J = 1.531383e+04  lr = 4.000e-09  |g| = 1.1002e+10
+  Adam iter  31  J = 1.352100e+04  lr = 4.000e-09  |g| = 1.2030e+10
+  Adam iter  32  J = 1.406805e+04  lr = 4.000e-09  |g| = 1.1248e+10
+  Adam iter  33  J = 1.336289e+04  lr = 4.000e-09  |g| = 9.8525e+09
+  Adam iter  34  J = 1.220978e+04  lr = 4.000e-09  |g| = 8.6054e+09
+  Adam iter  35  J = 1.238381e+04  lr = 4.000e-09  |g| = 9.5510e+09
+  Adam iter  36  J = 1.149283e+04  lr = 4.000e-09  |g| = 9.6168e+09
+  Adam iter  37  J = 1.067715e+04  lr = 4.000e-09  |g| = 7.8713e+09
+  Adam iter  38  J = 1.146028e+04  lr = 4.000e-09  |g| = 8.6845e+09
+  Adam iter  39  J = 1.039249e+04  lr = 4.000e-09  |g| = 8.4521e+09
+  Adam iter  40  J = 9.803938e+03  lr = 4.000e-09  |g| = 8.0885e+09
+  Adam iter  41  J = 9.699239e+03  lr = 4.000e-09  |g| = 7.1109e+09
+  Adam iter  42  J = 9.911246e+03  lr = 4.000e-09  |g| = 7.2184e+09
+  Adam iter  43  J = 9.550137e+03  lr = 4.000e-09  |g| = 7.3245e+09
+  Adam iter  44  J = 9.045060e+03  lr = 4.000e-09  |g| = 6.9765e+09
+  Adam iter  45  J = 8.464954e+03  lr = 4.000e-09  |g| = 6.1089e+09
+  Adam iter  46  J = 9.334852e+03  lr = 4.000e-09  |g| = 6.9114e+09
+  Adam iter  47  J = 8.149139e+03  lr = 4.000e-09  |g| = 6.1865e+09
+  Adam iter  48  J = 9.389327e+03  lr = 4.000e-09  |g| = 7.1817e+09
+  Adam iter  49  J = 8.400983e+03  lr = 4.000e-09  |g| = 6.0401e+09
+  Adam iter  50  J = 7.524296e+03  lr = 4.000e-09  |g| = 5.4571e+09
+Stage 3/3: 401 x 401, 100–250 kHz, 128 elements
+  Precomputing observed traces (128 shots per GPU batch)...
+  Gradient: 32 shots in batches of 32; wavefield every 4 step(s) as float16
+  Adam iter   1  J = 1.351287e+05  lr = 4.000e-09  |g| = 2.4679e+10
+  Adam iter   2  J = 1.235604e+05  lr = 4.000e-09  |g| = 2.4321e+10
+  Adam iter   3  J = 1.147950e+05  lr = 4.000e-09  |g| = 2.1676e+10
+  Adam iter   4  J = 1.150503e+05  lr = 4.000e-09  |g| = 1.9097e+10
+  Adam iter   5  J = 1.148685e+05  lr = 4.000e-09  |g| = 1.8034e+10
+  Adam iter   6  J = 1.101384e+05  lr = 4.000e-09  |g| = 1.9883e+10
+  Adam iter   7  J = 1.030667e+05  lr = 4.000e-09  |g| = 1.9410e+10
+  Adam iter   8  J = 1.069512e+05  lr = 4.000e-09  |g| = 1.9752e+10
+  Adam iter   9  J = 1.029451e+05  lr = 4.000e-09  |g| = 2.0410e+10
+  Adam iter  10  J = 1.008095e+05  lr = 4.000e-09  |g| = 1.8896e+10
+  Adam iter  11  J = 9.784824e+04  lr = 4.000e-09  |g| = 1.9493e+10
+  Adam iter  12  J = 8.950154e+04  lr = 4.000e-09  |g| = 1.7972e+10
+  Adam iter  13  J = 9.326008e+04  lr = 4.000e-09  |g| = 1.4944e+10
+  Adam iter  14  J = 9.222340e+04  lr = 4.000e-09  |g| = 1.4601e+10
+  Adam iter  15  J = 9.438607e+04  lr = 4.000e-09  |g| = 1.6235e+10
+  Adam iter  16  J = 8.690424e+04  lr = 4.000e-09  |g| = 1.4843e+10
+  Adam iter  17  J = 8.547476e+04  lr = 4.000e-09  |g| = 1.6507e+10
+  Adam iter  18  J = 8.722325e+04  lr = 4.000e-09  |g| = 1.6434e+10
+  Adam iter  19  J = 8.637154e+04  lr = 4.000e-09  |g| = 1.5843e+10
+  Adam iter  20  J = 8.334877e+04  lr = 4.000e-09  |g| = 1.4741e+10
+  Adam iter  21  J = 8.232616e+04  lr = 4.000e-09  |g| = 1.3717e+10
+  Adam iter  22  J = 7.946848e+04  lr = 4.000e-09  |g| = 1.4774e+10
+  Adam iter  23  J = 7.999969e+04  lr = 4.000e-09  |g| = 1.3531e+10
+  Adam iter  24  J = 7.798804e+04  lr = 4.000e-09  |g| = 1.4119e+10
+  Adam iter  25  J = 8.225897e+04  lr = 4.000e-09  |g| = 1.4964e+10
+  Adam iter  26  J = 7.597274e+04  lr = 4.000e-09  |g| = 1.3356e+10
+  Adam iter  27  J = 7.861977e+04  lr = 4.000e-09  |g| = 1.4842e+10
+  Adam iter  28  J = 7.904797e+04  lr = 4.000e-09  |g| = 1.4610e+10
+  Adam iter  29  J = 7.645248e+04  lr = 4.000e-09  |g| = 1.3498e+10
+  Adam iter  30  J = 7.425946e+04  lr = 4.000e-09  |g| = 1.2509e+10
+  Adam iter  31  J = 7.557820e+04  lr = 4.000e-09  |g| = 1.0860e+10
+  Adam iter  32  J = 6.964856e+04  lr = 4.000e-09  |g| = 1.0588e+10
+  Adam iter  33  J = 7.487719e+04  lr = 4.000e-09  |g| = 1.0373e+10
+  Adam iter  34  J = 7.352569e+04  lr = 4.000e-09  |g| = 1.0135e+10
+  Adam iter  35  J = 7.010505e+04  lr = 4.000e-09  |g| = 9.7797e+09
+  Adam iter  36  J = 6.776369e+04  lr = 4.000e-09  |g| = 9.6756e+09
+  Adam iter  37  J = 7.204876e+04  lr = 4.000e-09  |g| = 9.3616e+09
+  Adam iter  38  J = 7.387826e+04  lr = 4.000e-09  |g| = 1.0030e+10
+  Adam iter  39  J = 7.428853e+04  lr = 4.000e-09  |g| = 9.5924e+09
+  Adam iter  40  J = 7.512138e+04  lr = 4.000e-09  |g| = 9.8667e+09
+  Adam iter  41  J = 7.074699e+04  lr = 4.000e-09  |g| = 9.3118e+09
+  Adam iter  42  J = 7.064336e+04  lr = 4.000e-09  |g| = 9.5718e+09
+  Adam iter  43  J = 7.617187e+04  lr = 4.000e-09  |g| = 9.3684e+09
+  Adam iter  44  J = 6.871141e+04  lr = 4.000e-09  |g| = 8.2670e+09
+  Adam iter  45  J = 7.101478e+04  lr = 4.000e-09  |g| = 8.4486e+09
+  Adam iter  46  J = 6.896818e+04  lr = 4.000e-09  |g| = 8.6399e+09
+  Adam iter  47  J = 6.994097e+04  lr = 4.000e-09  |g| = 8.2606e+09
+  Adam iter  48  J = 7.340502e+04  lr = 4.000e-09  |g| = 8.7660e+09
+  Adam iter  49  J = 6.742421e+04  lr = 4.000e-09  |g| = 8.7881e+09
+  Adam iter  50  J = 6.320971e+04  lr = 4.000e-09  |g| = 8.6682e+09
+2D ring FWI results
+  Phantom:                         CT sound-speed map (totalseg_s1366_acoustic.npz)
+  Precomputed observed shots:      all 128 transmitters
+  Gradient shots per evaluation:   32
+  Random shot seed:                0
+  Last gradient transmitters:      [0, 3, 4, 7, 18, 19, 20, 27, 29, 31, 33, 38, 42, 49, 57, 60, 64, 67, 82, 97, 99, 100, 101, 105, 107, 110, 113, 114, 116, 118, 119, 124]
+  Time steps:                      3039
+  dt:                              1.224e-07 s
+  PyTorch device:                  CUDA 0: NVIDIA RTX A6000; 84 SMs; 47.4 GiB
+  Precision / compiled step:       float32 / True
+  Model:                           pixel slowness
+  Optimizer:                       adam
+  Adam learning rate:              4e-09
+  Optimization iterations:         50
+  Total wall time:                 476.795 s
+  Stage timing:
+    1. 101 x 101, 4 mm, 10–50 kHz, 128 elements, Adam lr 1e-08
+       observed data 7.750 s; optimization 68.127 s; stage total 75.877 s; 200 iterations
+    2. 201 x 201, 1.83 mm, 50–125 kHz, 128 elements, Adam lr 4e-09
+       observed data 3.905 s; optimization 77.892 s; stage total 81.798 s; 50 iterations
+    3. 401 x 401, 1.5 mm, 100–250 kHz, 128 elements, Adam lr 4e-09
+       observed data 10.194 s; optimization 308.919 s; stage total 319.119 s; 50 iterations
+  Initial J:                       1.380800e+05
+  Final J:                         6.320971e+04
+  Interior RMS c error:            293.071 m/s
+  Interior c range (true):         1450–3750 m/s
+  Interior c range (reconstructed): 1400–3900 m/s
+Saved reconstruction: totalseg_s1366_coarse200_model.npz
+Saved inversion dashboard: totalseg_s1366_coarse200_multiscale.png
