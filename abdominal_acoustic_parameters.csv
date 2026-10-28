@@ -1,0 +1,11 @@
+Tissue Type,Speed of Sound (m/s),Density (kg/m3),Attenuation Alpha0 (dB/MHz^y-cm),Power Law Exponent y,Non-linearity Parameter B/A
+Soft Tissue (Machine Average),1540,1000.0,0.5,1.1,7.0
+Water / Bile / Urine,1480,1000.0,0.0022,2.0,5.0
+Fat (Visceral/Subcutaneous),1450,920.0,0.75,1.25,10.0
+Liver,1570,1060.0,0.6,1.2,6.8
+Kidney,1560,1050.0,0.9,1.0,7.2
+Blood,1575,1050.0,0.15,1.3,6.1
+Muscle (Abdominal Wall),1580,1080.0,1.1,1.0,7.4
+Spleen,1567,1054.0,0.55,1.2,6.8
+Bowel Gas / Air,343,1.2,12.0,2.0,0.4
+Bone / Cortical Rib,3750,1900.0,15.0,1.5,0.0

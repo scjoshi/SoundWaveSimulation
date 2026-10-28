@@ -15,3 +15,6 @@ __pycache__/
 .DS_Store
 .vscode/
 .idea/
+
+# Downloaded datasets (re-fetch with totalseg_to_speed.py --fetch)
+data/

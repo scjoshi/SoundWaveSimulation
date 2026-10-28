@@ -1,0 +1,76 @@
+Stage 1/1: 101 x 101, 25–75 kHz
+  Precomputing observed traces (16 shots per GPU batch)...
+  Adam iter   1  J = 6.098072e+03  lr = 4.000e-09  |g| = 6.3479e+09
+  Adam iter   2  J = 5.192009e+03  lr = 4.000e-09  |g| = 6.1673e+09
+  Adam iter   3  J = 4.251285e+03  lr = 4.000e-09  |g| = 4.3697e+09
+  Adam iter   4  J = 4.032630e+03  lr = 4.000e-09  |g| = 4.5079e+09
+  Adam iter   5  J = 4.076307e+03  lr = 4.000e-09  |g| = 5.2253e+09
+  Adam iter   6  J = 3.874072e+03  lr = 4.000e-09  |g| = 4.3381e+09
+  Adam iter   7  J = 3.796935e+03  lr = 4.000e-09  |g| = 4.0229e+09
+  Adam iter   8  J = 3.391981e+03  lr = 4.000e-09  |g| = 3.9706e+09
+  Adam iter   9  J = 4.016769e+03  lr = 4.000e-09  |g| = 3.6435e+09
+  Adam iter  10  J = 3.608271e+03  lr = 4.000e-09  |g| = 3.4033e+09
+  Adam iter  11  J = 2.915642e+03  lr = 4.000e-09  |g| = 2.8545e+09
+  Adam iter  12  J = 3.017224e+03  lr = 4.000e-09  |g| = 3.1375e+09
+  Adam iter  13  J = 2.712417e+03  lr = 4.000e-09  |g| = 3.5782e+09
+  Adam iter  14  J = 3.176339e+03  lr = 4.000e-09  |g| = 4.1495e+09
+  Adam iter  15  J = 2.820613e+03  lr = 4.000e-09  |g| = 3.9884e+09
+  Adam iter  16  J = 2.582060e+03  lr = 4.000e-09  |g| = 3.1405e+09
+  Adam iter  17  J = 3.377491e+03  lr = 4.000e-09  |g| = 3.6451e+09
+  Adam iter  18  J = 2.853987e+03  lr = 4.000e-09  |g| = 3.3760e+09
+  Adam iter  19  J = 2.515006e+03  lr = 4.000e-09  |g| = 2.8051e+09
+  Adam iter  20  J = 2.240774e+03  lr = 4.000e-09  |g| = 2.5386e+09
+  Adam iter  21  J = 2.493950e+03  lr = 4.000e-09  |g| = 2.4173e+09
+  Adam iter  22  J = 2.808213e+03  lr = 4.000e-09  |g| = 2.5165e+09
+  Adam iter  23  J = 2.360949e+03  lr = 4.000e-09  |g| = 2.3325e+09
+  Adam iter  24  J = 2.200868e+03  lr = 4.000e-09  |g| = 2.1545e+09
+  Adam iter  25  J = 2.923720e+03  lr = 4.000e-09  |g| = 2.8339e+09
+  Adam iter  26  J = 2.227887e+03  lr = 4.000e-09  |g| = 2.4836e+09
+  Adam iter  27  J = 2.244047e+03  lr = 4.000e-09  |g| = 2.3052e+09
+  Adam iter  28  J = 2.472975e+03  lr = 4.000e-09  |g| = 2.5902e+09
+  Adam iter  29  J = 2.232908e+03  lr = 4.000e-09  |g| = 2.5332e+09
+  Adam iter  30  J = 2.436393e+03  lr = 4.000e-09  |g| = 2.7229e+09
+  Adam iter  31  J = 2.007740e+03  lr = 4.000e-09  |g| = 2.3287e+09
+  Adam iter  32  J = 1.957825e+03  lr = 4.000e-09  |g| = 2.3603e+09
+  Adam iter  33  J = 1.889015e+03  lr = 4.000e-09  |g| = 2.1271e+09
+  Adam iter  34  J = 2.193263e+03  lr = 4.000e-09  |g| = 2.1459e+09
+  Adam iter  35  J = 1.993390e+03  lr = 4.000e-09  |g| = 1.8800e+09
+  Adam iter  36  J = 2.085619e+03  lr = 4.000e-09  |g| = 2.2362e+09
+  Adam iter  37  J = 1.733914e+03  lr = 4.000e-09  |g| = 1.6917e+09
+  Adam iter  38  J = 2.181197e+03  lr = 4.000e-09  |g| = 2.0310e+09
+  Adam iter  39  J = 1.406423e+03  lr = 4.000e-09  |g| = 1.6905e+09
+  Adam iter  40  J = 2.226347e+03  lr = 4.000e-09  |g| = 1.9439e+09
+  Adam iter  41  J = 1.903831e+03  lr = 4.000e-09  |g| = 1.8241e+09
+  Adam iter  42  J = 1.705501e+03  lr = 4.000e-09  |g| = 1.6789e+09
+  Adam iter  43  J = 2.494087e+03  lr = 4.000e-09  |g| = 1.9703e+09
+  Adam iter  44  J = 1.614534e+03  lr = 4.000e-09  |g| = 1.6649e+09
+  Adam iter  45  J = 2.055635e+03  lr = 4.000e-09  |g| = 1.7464e+09
+  Adam iter  46  J = 2.041303e+03  lr = 4.000e-09  |g| = 1.7805e+09
+  Adam iter  47  J = 1.817390e+03  lr = 4.000e-09  |g| = 1.7270e+09
+  Adam iter  48  J = 2.033741e+03  lr = 4.000e-09  |g| = 1.6485e+09
+  Adam iter  49  J = 1.602670e+03  lr = 4.000e-09  |g| = 1.5697e+09
+  Adam iter  50  J = 1.354152e+03  lr = 4.000e-09  |g| = 1.4489e+09
+2D ring FWI results
+  Phantom:                         CT sound-speed map (abdomen_acoustic.npz)
+  Precomputed observed shots:      all 64 transmitters
+  Gradient shots per evaluation:   4
+  Random shot seed:                0
+  Last gradient transmitters:      [16, 17, 42, 50]
+  Time steps:                      1029
+  dt:                              4.094e-07 s
+  PyTorch device:                  CPU; 8 PyTorch threads
+  Precision / compiled step:       float32 / False
+  Model:                           pixel slowness
+  Optimizer:                       adam
+  Adam learning rate:              4e-09
+  Optimization iterations:         50
+  Total wall time:                 70.746 s
+  Stage timing:
+    1. 101 x 101, 4.63 mm, 25–75 kHz
+       observed data 2.122 s; optimization 68.622 s; stage total 70.746 s; 50 iterations
+  Initial J:                       7.346626e+03
+  Final J:                         1.354152e+03
+  Interior RMS c error:            298.502 m/s
+  Interior c range (true):         1478–3476 m/s
+  Interior c range (reconstructed): 1400–1832 m/s
+Saved inversion dashboard: /private/tmp/claude-501/-Users-sarang-Documents-Codeing-SoundwaveSimukation/b0c53788-2d12-4772-963a-4522717fe529/scratchpad/abdomen_coarse.png
