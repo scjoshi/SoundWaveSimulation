@@ -39,13 +39,16 @@ This note describes the time-domain full-waveform inversion (FWI) implemented in
 ring-array ultrasound traces, and \code{totalseg\_to\_speed.py}, which builds
 abdominal sound-speed maps from an open, expert-segmented CT dataset and a
 table of tissue acoustic properties. On a TotalSegmentator abdomen
-(1450--3750~m/s, 128 elements, three frequency stages; 6~min on an RTX A6000)
-the misfit falls in every stage, but the result is worse than the starting
-model: the vertebral body comes out hollow, the ribs are missing, false
-bone-speed patches appear, and the soft-tissue RMS error grows from 53 to
-204~m/s, with only the liver and blood vessels improving. An earlier run on a
-threshold-based KiTS-00136 abdomen showed the same bone failure. Both point to
-cycle skipping in bone as the main obstacle.
+(1450--3750~m/s, 128 elements), a two-stage inversion (10--50~kHz on a
+4.0~mm grid, then 50--125~kHz on a 1.83~mm grid, with total-variation
+regularization) started from uniform water recovers the organs, fat layers and
+muscle in 6.4~min on an RTX A6000. More than 10~mm from bone the soft-tissue
+RMS error is 5.7~m/s (liver 7, kidney 6, muscle 8, fat 8~m/s); the remaining
+error sits in a thin layer around bone, and bone itself is located but too slow
+(median 2730 against 3750~m/s). A third stage at 100--250~kHz, run from this
+model, cycle-skips and destroys the reconstruction regardless of earlier
+settings, so the two-stage model is the result and the fine stage is left to
+future work.
 \end{abstract}
 
 \section{Forward model}
@@ -92,23 +95,24 @@ setup, which scales the grid and ring to fit a 0.3~m-wide torso.
 \centering
 \small
 \caption{Simulation parameters. Abdomen values (TotalSegmentator subject
-  s1366) are listed per multiscale stage.}
+  s1366) are listed per multiscale stage; the optional third stage is in
+  Section~\ref{sec:future}.}
 \label{tab:setup}
 \begin{tabular}{@{}lll@{}}
 \toprule
 Parameter & Phantom setup (default) & Abdomen setup, per stage \\
 \midrule
-Grid (cells) & $401 \times 401$ & $101^2 \to 201^2 \to 401^2$ \\
-Grid spacing $\Delta x$ & 0.50~mm & 4.00 $\to$ 1.83 $\to$ 1.50~mm \\
-Field of view & 200~mm & 404 $\to$ 367 $\to$ 602~mm \\
-Ring radius & 70~mm & 167.7 $\to$ 168.3 $\to$ 168.5~mm \\
+Grid (cells) & $401 \times 401$ & $101^2 \to 201^2$ \\
+Grid spacing $\Delta x$ & 0.50~mm & 4.00 $\to$ 1.83~mm \\
+Field of view & 200~mm & 404 $\to$ 367~mm \\
+Ring radius & 70~mm & 167.7 $\to$ 168.3~mm \\
 Elements & 256 (pitch 1.7~mm) & 128 (pitch 8.3~mm) \\
 Coupling medium & water, 1500~m/s & water, 1480~m/s \\
-Source pulse & Hann-windowed linear chirp, & 25--75~kHz / 80~$\mu$s $\to$ \\
- & 100--250~kHz, 20~$\mu$s & 50--125~kHz / 40~$\mu$s $\to$ 100--250~kHz / 20~$\mu$s \\
-Time step $\Delta t$ (CFL 0.45) & $\approx 80$~ns & 326 $\to$ 149 $\to$ 122~ns \\
-Record length & $1.6\times$ ring diameter / slowest speed & $\approx 371~\mu$s (1135 $\to$ 2490 $\to$ 3039 steps) \\
-Points per shortest wavelength & $\approx 12$ & $\approx$ 4.8 $\to$ 6.3 $\to$ 3.9 \\
+Source pulse & Hann-windowed linear chirp, & 10--50~kHz / 80~$\mu$s $\to$ \\
+ & 100--250~kHz, 20~$\mu$s & 50--125~kHz / 40~$\mu$s \\
+Time step $\Delta t$ (CFL 0.45) & $\approx 80$~ns & 326 $\to$ 149~ns \\
+Record length & $1.6\times$ ring diameter / slowest speed & $\approx 371~\mu$s (1135 $\to$ 2490 steps) \\
+Points per shortest wavelength & $\approx 12$ & $\approx$ 7.3 $\to$ 6.3 \\
 Inversion bounds on $c$ & 1400--2000~m/s & 1400--3900~m/s \\
 \bottomrule
 \end{tabular}
@@ -117,8 +121,7 @@ Inversion bounds on $c$ & 1400--2000~m/s & 1400--3900~m/s \\
 The abdomen time steps follow from the 3900~m/s upper bound, which sets the CFL
 limit. The record length is 1.6 times the time to cross the ring diameter at the
 slowest speed in the medium (fat, 1450~m/s). The grid is never finer than the CT
-pixels, so the final stage runs at the 1.5~mm CT spacing on a 602~mm field of
-view, most of it coupling water.
+pixels (1.5~mm); the final stage-2 grid is 1.83~mm.
 
 \subsection{Abdominal sound-speed model from an open segmentation}
 \label{sec:totalseg}
@@ -255,7 +258,9 @@ the gradient and first-order updates. Everything below is implemented in
     $[1/c_{\max}^2,\, 1/c_{\min}^2]$ and the exterior is reset to the
     background.
   \item \textbf{Starting model.} Homogeneous coupling medium (1500 or
-    1480~m/s) inside the mask.
+    1480~m/s) inside the mask. For diagnosis only,
+    \code{-{}-start-blurred-truth $\sigma$} starts from the true slowness
+    blurred by a Gaussian of $\sigma$~mm.
 \end{itemize}
 
 \subsection{Objective}
@@ -263,13 +268,22 @@ the gradient and first-order updates. Everything below is implemented in
 \begin{equation}
   J(m) = \frac{1}{2}\sum_{s \in S}\sum_{r \neq s}\sum_{n}
   \left(d^{\,\mathrm{pred}}_{s,r,n}(m) - d^{\,\mathrm{obs}}_{s,r,n}\right)^2
-  + \frac{\alpha}{2}\,\lVert \nabla m \rVert^2_{\Omega}.
+  + \frac{\alpha}{2}\,\lVert \nabla m \rVert^2_{\Omega}
+  + \beta \sum_{\Omega} \left(\sqrt{\lvert \nabla m \rvert^2 + \varepsilon^2} - \varepsilon\right).
 \end{equation}
 $S$ is the set of active transmitters, $r$ runs over receivers and $n$ over
 time samples. The transmitter's own channel is excluded because a point
-source's direct pressure is a poorly conditioned datum. The Tikhonov term
-penalizes differences between neighbouring pixels inside $\Omega$; its weight
-$\alpha$ (\code{-{}-reg}) defaults to 0.
+source's direct pressure is a poorly conditioned datum. (In batched runs
+before commit \code{d519e92} this exclusion silently failed; see
+Section~\ref{sec:s1366}.) The Tikhonov term penalizes squared differences
+between neighbouring pixels inside $\Omega$, with weight $\alpha$
+(\code{-{}-reg}). The total-variation (TV) term penalizes the magnitude of the
+forward-difference gradient, smoothed by $\varepsilon$ (\code{-{}-tv-eps},
+default $10^{-9}$ in units of $m$, about 2~m/s at 1500~m/s), with weight
+$\beta$ (\code{-{}-tv}). Because TV grows linearly with a jump, it suppresses
+speckle while leaving sharp organ and bone boundaries much cheaper than the
+quadratic Tikhonov term does. Both weights default to 0 and can be set per
+stage.
 
 Observed data are synthetic: at the start of each stage the same solver
 simulates all $N$ transmitters through the true medium, without noise.
@@ -284,9 +298,14 @@ $c^2$ accumulates as
 \begin{equation}
   g_{c^2} = \Delta t^2 \sum_{n} \lambda^{n} \odot L\!\left[u^{\,n-1}\right],
   \qquad
-  \frac{\partial J}{\partial m} = -\frac{g_{c^2}}{m^2} + \alpha\,\nabla_m R(m).
+  \frac{\partial J}{\partial m} = -\frac{g_{c^2}}{m^2} + \nabla_m R(m),
 \end{equation}
-The gradient is set to zero outside the mask. The adjoint reuses the forward Mur
+where $R$ is the sum of the Tikhonov and TV terms. The gradient is set to zero
+outside the mask. With \code{-{}-store-every $k$} the sum runs over every
+$k$-th forward step, weighted by $k$, and \code{-{}-wave-dtype float16} stores
+the forward fields at half precision; on the test problem these change the
+gradient by $2\times10^{-7}$ ($k = 4$) and $9\times10^{-5}$ (float16). The
+adjoint reuses the forward Mur
 boundary update, which is not its exact transpose; the finite-difference
 gradient check (Section~\ref{sec:verification}) bounds the effect of this.
 
@@ -302,9 +321,10 @@ gradient check (Section~\ref{sec:verification}) bounds the effect of this.
 \code{-{}-optimizer} & Update & Notes \\
 \midrule
 \code{adam} (default) & Projected Adam on $m$, $\beta_1 = 0.9$, $\beta_2 = 0.999$ &
-  Step size \code{-{}-adam-lr} in units of $m$ (s$^2$/m$^2$): $10^{-9}$ default,
-  $4\times10^{-9}$ converges faster on coarse grids. Tolerates the noisy
-  gradients of shot sub-sampling. \\
+  Step size \code{-{}-adam-lr} in units of $m$ (s$^2$/m$^2$), per stage:
+  $10^{-9}$ default; the abdomen run uses $10^{-8}$ on the coarse stage and
+  $4\times10^{-9}$ on stage 2. Each pixel moves by at most about the step size
+  per iteration. Tolerates the noisy gradients of shot sub-sampling. \\
 \code{cg} & Polak--Ribi\`ere nonlinear CG, Armijo backtracking, restart when $\beta < 0$ &
   Deterministic; conjugacy is lost when shots are re-sampled each evaluation. \\
 \code{gradient-descent} & Projected fixed step \code{-{}-step-size} & Baseline. \\
@@ -321,16 +341,26 @@ the network by the chain rule.
 Each gradient evaluation uses $K$ transmitters drawn at random without
 replacement (\code{-{}-n-shots}, default 4; \code{-{}-shot-seed} fixes the
 sequence), so one evaluation costs $2K$ wave solves instead of $2N$. Shots run
-in GPU batches of up to \code{-{}-parallel-shots} (default 16).
+in GPU batches of up to \code{-{}-parallel-shots}. Its default,
+\code{auto}, sizes each stage's batches from free GPU memory and splits the
+shots into equal batches; the abdomen run fits all 32 shots in one batch.
 
 \subsection{Multiscale continuation}
 
-\code{-{}-multiscale} runs three stages from low to high frequency on
-progressively finer grids (Table~\ref{tab:setup}). Each stage regenerates its
-own observed data, and the final $m$ of one stage is transferred to the next by
-bicubic interpolation. Starting at 25--75~kHz lengthens the period relative to
-the initial travel-time errors, which reduces cycle skipping: fitting a trace
-one period off, which traps single-scale inversions in a wrong model.
+\code{-{}-multiscale} runs coarse-to-fine stages on progressively finer grids
+(Table~\ref{tab:setup}). Each stage regenerates its own observed data, and the
+final $m$ of one stage is transferred to the next by bicubic interpolation.
+\code{-{}-stages} sets how many run: the default of 2 runs the $101^2$ and
+$201^2$ stages, and the stage-2 model is the result. A third, $401^2$ stage at
+100--250~kHz is available with \code{-{}-stages 3} but is experimental
+(Section~\ref{sec:future}). \code{-{}-coarse-band} sets the first stage's
+chirp band (default 25--75~kHz; the abdomen uses 10--50~kHz). Starting at a low
+frequency lengthens the period relative to the initial travel-time errors,
+which reduces cycle skipping: fitting a trace one period off, which traps
+inversions in a wrong model. \code{-{}-n-elements}, \code{-{}-max-iter},
+\code{-{}-adam-lr}, \code{-{}-reg} and \code{-{}-tv} take either one value or
+one value per stage, and \code{-{}-save-model X.npz} also saves every earlier
+stage as \code{X\_stage$k$.npz}.
 
 \section{Algorithm at a glance}
 
@@ -347,7 +377,7 @@ one period off, which traps single-scale inversions in a wrong model.
   \node[fwbox] (obs) at (0, 2.4) {\textbf{Simulate observed data}\\[-1pt]
     {\footnotesize all $N$ shots through the true medium}};
   \node[fwbox] (sample) at (0, 0) {\textbf{Sample $K$ shots}\\[-1pt]
-    {\footnotesize random subset, $K = 4$ default}};
+    {\footnotesize random subset, $K = 32$ for the abdomen}};
   \node[fwbox] (fwd) at (5, 0) {\textbf{Forward FDTD}\\[-1pt]
     {\footnotesize store the wavefield history}};
   \node[fwbox] (res) at (10, 0) {\textbf{Receiver residuals}\\[-1pt]
@@ -375,8 +405,8 @@ one period off, which traps single-scale inversions in a wrong model.
   \draw[arrow] (next.east) -| ([xshift=6mm]loop.east) |- node[note, pos=0.75, above] {finer grid, higher band} (obs.east);
 \end{tikzpicture}
 \caption{FWI loop inside each multiscale stage. Every iteration costs one
-  forward and one adjoint solve per sampled shot; the three stages repeat the
-  whole loop at 25--75, 50--125 and 100--250~kHz.}
+  forward and one adjoint solve per sampled shot; in the abdomen run the two
+  stages repeat the whole loop at 10--50 and 50--125~kHz.}
 \label{fig:loop}
 \end{figure}
 
@@ -387,18 +417,18 @@ The adjoint gradient matches finite differences to second order, and the cost
 of one iteration is two wave solves per sampled shot plus the stored wavefield.
 
 \begin{itemize}
-  \item \textbf{Batching.} \code{TorchFDTD2DBatch} advances up to
-    \code{-{}-parallel-shots} independent shots as one (batch, $n_y$, $n_x$)
-    tensor; forward and adjoint passes share the same Laplacian convolution and
-    Mur update. On CUDA both are compiled with
-    \code{torch.compile(mode="reduce-overhead")}.
-  \item \textbf{Memory.} The forward pass keeps every time step of every shot in
-    the batch for the adjoint. In float32 this is
-    $n_{\mathrm{steps}} \times n_y \times n_x \times 4$ bytes per shot: about
-    1.3~GB for the $401^2$ phantom grid and 1.95~GB for the $401^2$ s1366
-    abdomen stage (3039 steps). The batch size is therefore memory-bound on the
-    final stage; the s1366 run used \code{-{}-parallel-shots 2} on a 17~GB
-    machine.
+  \item \textbf{Batching.} \code{TorchFDTD2DBatch} advances independent shots
+    as one (batch, $n_y$, $n_x$) tensor. Each forward step is fused with the
+    receiver gather, and each adjoint step with the residual injection and the
+    gradient accumulation, so a time step is one compiled call
+    (\code{torch.compile(mode="reduce-overhead")} on CUDA). Against the earlier
+    unfused code this is about $9\times$, $6\times$ and $2\times$ faster per
+    shot on the three abdomen grids.
+  \item \textbf{Memory.} The forward pass keeps the wavefield of every shot in
+    the batch for the adjoint: $n_{\mathrm{steps}} \times n_y \times n_x \times 4$
+    bytes per shot in float32 (1.95~GB on a $401^2$, 3039-step grid). Storing
+    every fourth step in float16 cuts this $8\times$; the two-stage abdomen run
+    peaks at about 10~GB.
   \item \textbf{Gradient check.} \code{python invert\_ring.py -{}-gradient-check
     -{}-dtype float64} compares the adjoint directional derivative
     $g \cdot \delta m$ with central differences on a $41 \times 41$ grid with a
@@ -425,115 +455,198 @@ The error falls $100\times$ per $10\times$ smaller step, the expected behaviour
 for a correct gradient with a second-order difference; the approximate adjoint
 of the Mur boundary does not show at this level. A pytest suite
 (\code{tests/}) checks the neural parameterization's chain rule the same way on
-ring and arc problems.
+ring and arc problems, and checks that the fused batched gradient matches an
+unbatched reference to $10^{-12}$, the subsampled and float16 gradients, and the
+TV gradient against finite differences.
 
 \section{Abdomen imaging results}
 \label{sec:results}
 
-Three-stage FWI of the segmentation-based s1366 abdomen fits the data better
-at every stage, but the final model is further from the true speeds than the
-uniform 1480~m/s starting model: interior RMS error 314.7 versus 293.1~m/s.
-Soft tissue degrades the most, from 53.3 to 203.8~m/s, while only the liver,
-blood vessels and, marginally, bone improve.
+Two-stage FWI of the segmentation-based s1366 abdomen, started from uniform
+1480~m/s water, recovers the soft-tissue anatomy: the interior RMS error falls
+from 297.2 to 142.6~m/s, the soft-tissue RMS error from 53.6 to 36.9~m/s, and to
+5.7~m/s more than 10~mm from bone. The remainder is under-recovered bone and the
+tissue immediately around it. Section~\ref{sec:history}
+records the runs that led to this setup, including why the $401^2$ stage is
+dropped.
 
 \subsection{Segmentation-based abdomen (TotalSegmentator s1366)}
 \label{sec:s1366}
 
 The run used the s1366 map of Section~\ref{sec:totalseg} and the setup of
-Table~\ref{tab:setup}. It was run on an NVIDIA RTX A6000 (desmond):
+Table~\ref{tab:setup}, on an NVIDIA RTX A6000 (desmond):
 \begin{verbatim}
-python invert_ring.py --device cuda --ct-speed totalseg_s1366_acoustic.npz \
-  --multiscale --n-elements 128 --n-shots 4 --max-iter 50 --adam-lr 4e-9 \
-  --c-min 1400 --c-max 3900 --save-model totalseg_s1366_model.npz \
+python invert_ring.py --device cuda --compile on --no-show \
+  --ct-speed totalseg_s1366_acoustic.npz \
+  --multiscale --coarse-band 10 50 --n-elements 128 --n-shots 32 \
+  --max-iter 200 200 --adam-lr 1e-8 4e-9 --reg 0 --tv 0 1e7 \
+  --store-every 4 --wave-dtype float16 \
+  --c-min 1400 --c-max 3900 --save-model totalseg_s1366_final200_model.npz \
+  --save-figure totalseg_s1366_final200_multiscale.png \
   --display-range 1420 1620 --display-diff 300 --crop-to-ring
 \end{verbatim}
-The log is \code{totalseg\_s1366\_multiscale\_log.txt} and the reconstruction
-is saved in \code{totalseg\_s1366\_model.npz}, so the figure can be redrawn with
-\code{invert\_ring.py -{}-replot}. An identical CPU run (8 threads, 2 shots per
-batch) gave the same result: interior RMS error 314.710~m/s in both runs, and
-final misfits agreeing to $10^{-6}$.
+\code{-{}-multiscale} runs two stages by default. The coarse stage is
+unregularized and uses the larger step; stage 2 adds TV with
+$\beta = 10^{7}$. Both stages run 200 iterations: with 50, stage 2 had not
+converged (Table~\ref{tab:history}). The log is
+\code{totalseg\_s1366\_final200\_log.txt}; the models are
+\code{totalseg\_s1366\_final200\_model.npz} (stage 2) and
+\code{totalseg\_s1366\_final200\_model\_stage1.npz}.
 
 \begin{table}[ht]
 \centering
 \small
-\caption{s1366 multiscale run per stage (50 Adam iterations each, float32).
-  $J$ is computed on the 4 random shots of each iteration, so values are noisy
-  and not comparable between stages. Times are stage totals including the
+\caption{Final s1366 run per stage (32 random shots per iteration, one GPU
+  batch). $J$ at iteration 1 is after the first update. Times include the
   observed-data simulation.}
 \label{tab:s1366}
 \begin{tabular}{@{}lrrrr@{}}
 \toprule
-Stage & $J$, iteration 1 & $J$, iteration 50 & CPU (s) & RTX A6000 (s) \\
+Stage & Iterations & $J$, iteration 1 & $J$, final & RTX A6000 (s) \\
 \midrule
-$101^2$, 4.00~mm, 25--75~kHz & $2.83\times10^{4}$ & $2.40\times10^{3}$ & 87 & 84 \\
-$201^2$, 1.83~mm, 50--125~kHz & $9.55\times10^{3}$ & $1.41\times10^{3}$ & 507 & 133 \\
-$401^2$, 1.50~mm, 100--250~kHz & $1.50\times10^{4}$ & $8.70\times10^{3}$ & 2824 & 154 \\
+$101^2$, 4.00~mm, 10--50~kHz & 200 & $1.46\times10^{5}$ & $3.91\times10^{1}$ & 76 \\
+$201^2$, 1.83~mm, 50--125~kHz & 200 & $7.97\times10^{4}$ & $1.88\times10^{3}$ & 311 \\
 \midrule
-Total & & & 3419 & 371 \\
+Total & & & & 386 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 \begin{figure}[ht]
   \centering
-  \includegraphics[width=\textwidth]{totalseg_s1366_multiscale.png}
-  \caption{Multiscale FWI of the s1366 abdomen, cropped to the ring. True $c$
-    and reconstruction after the $401^2$ / 100--250~kHz stage in a
-    1420--1620~m/s window (bone saturates), difference clipped at
-    $\pm300$~m/s, and the final-stage misfit. The plot's $y$ axis runs
-    anterior (bottom) to posterior (top).}
+  \includegraphics[width=\textwidth]{totalseg_s1366_final200_multiscale.png}
+  \caption{Two-stage FWI of the s1366 abdomen, cropped to the ring. True $c$
+    and the stage-2 reconstruction in a 1420--1620~m/s window (bone
+    saturates), difference clipped at $\pm300$~m/s, and the stage-2 misfit.
+    The plot's $y$ axis runs anterior (bottom) to posterior (top).}
   \label{fig:s1366}
 \end{figure}
 
 \begin{table}[ht]
 \centering
 \small
-\caption{Interior speed error by tissue for the s1366 run, computed from the
-  saved model on the $401^2$ grid. ``Start'' is the uniform 1480~m/s starting
-  model.}
+\caption{Interior speed error by tissue for the final s1366 run, computed from
+  the saved stage-2 model on the $201^2$ grid. ``Start'' is the uniform
+  1480~m/s starting model.}
 \label{tab:s1366_errors}
 \begin{tabular}{@{}lrrrr@{}}
 \toprule
 Region & Pixels & Start RMS (m/s) & Final RMS (m/s) & Final bias (m/s) \\
 \midrule
-All interior & 38\,249 & 293.1 & 314.7 & $+28$ \\
-All soft tissue ($c < 2000$~m/s) & 37\,632 & 53.3 & 203.8 & $+58$ \\
-\quad Fat & 8\,480 & 30.0 & 292.7 & $+138$ \\
-\quad Soft-tissue average (other, bowel, pancreas) & 8\,628 & 60.0 & 264.0 & $+51$ \\
-\quad Muscle & 1\,146 & 100.0 & 138.6 & $-41$ \\
-\quad Spleen & 204 & 87.0 & 106.2 & $-28$ \\
-\quad Kidney & 552 & 80.0 & 97.0 & $-45$ \\
-\quad Liver & 5\,803 & 90.0 & 73.8 & $+3$ \\
-\quad Blood vessels & 519 & 95.0 & 73.1 & $+1$ \\
-\quad Coupling water (inside ring) & 12\,300 & 0.0 & 118.1 & $+52$ \\
-Bone & 617 & 2270.0 & 1899.1 & $-1785$ \\
+All interior & 25\,493 & 297.2 & 142.6 & $-11$ \\
+All soft tissue ($c < 1700$~m/s) & 25\,070 & 53.6 & 36.9 & $+2$ \\
+\quad more than 10~mm from bone & 22\,780 & & 5.7 & \\
+\quad within 10~mm of bone & 2\,290 & & 120.7 & \\
+\quad Fat & 5\,699 & 30.0 & 8.3 & $+3$ \\
+\quad Soft-tissue average (other, bowel, pancreas) & 5\,823 & 60.0 & 75.5 & $+10$ \\
+\quad Muscle & 769 & 100.0 & 8.0 & $-3$ \\
+\quad Spleen & 138 & 87.0 & 32.3 & $-15$ \\
+\quad Kidney & 368 & 80.0 & 6.4 & $-3$ \\
+\quad Liver & 3\,915 & 90.0 & 7.4 & $-1$ \\
+\quad Blood vessels & 349 & 95.0 & 7.1 & $-5$ \\
+\quad Water, bile, urine (incl.\ coupling water) & 8\,009 & 0.0 & 2.5 & $0$ \\
+Bone & 423 & 2270.0 & 1069.9 & $-783$ \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 \begin{itemize}
-  \item \textbf{Bone.} The vertebral body comes out as a ring: too fast at its
-    anterior rim and still about 2000~m/s too slow inside. The thin ribs are
-    not recovered.
-  \item \textbf{False bone-speed patches.} Patches above 1620~m/s (up to
-    2500--3500~m/s) appear in the posterior soft tissue near the spinous
-    process and posterior ribs, where the true speed is 1450--1580~m/s.
-  \item \textbf{Soft tissue.} The body and the surrounding water are covered
-    by speckle and streaks of $\pm100$--300~m/s, with a broad positive bias in
-    the fat and the anterior abdomen. Organ outlines are barely visible. Only
-    the liver (73.8~m/s) and blood vessels (73.1~m/s) end better than they
-    started (Table~\ref{tab:s1366_errors}).
-  \item \textbf{Convergence.} $J$ falls $12\times$ and $7\times$ in the first
-    two stages but only $1.7\times$ in the last, where it stays noisy.
+  \item \textbf{Soft tissue.} Liver, kidney, spleen, muscle, vessels and the
+    subcutaneous and visceral fat appear with sharp boundaries and nearly
+    unbiased speeds; away from bone the error map is blank except for faint
+    lines along tissue boundaries (Figure~\ref{fig:s1366}).
+  \item \textbf{Near bone.} The soft tissue within 10~mm of bone carries almost
+    all the remaining soft-tissue error (120.7~m/s RMS over 9\% of the
+    soft-tissue pixels), most visibly the tissue enclosed by the vertebral body,
+    which comes out too fast. This is why the ``soft-tissue average'' class,
+    which includes the paravertebral tissue, ends worse than it started, and
+    why the soft-tissue total rises slightly between 50 and 200 iterations
+    (32.2 to 36.9~m/s) while every organ improves.
+  \item \textbf{Bone.} The vertebral body, spinous process and every rib are in
+    the right place, but too slow: median 2730 against 3750~m/s, up from 2210
+    after 50 iterations. Some bone pixels reach the 3900~m/s bound.
+  \item \textbf{Artifacts.} No speckle or radial streaks: at 125~kHz the
+    8.3~mm element pitch is 0.7 wavelengths, close enough to adequate sampling.
+  \item \textbf{Convergence.} The coarse stage fits its data almost exactly
+    ($J$ falls $3700\times$). Stage 2 falls $42\times$ and has nearly levelled
+    off: $J$ drops 62\% between iterations 50 and 100, 16\% from 100 to 150 and
+    3\% from 150 to 200.
 \end{itemize}
 
-The pattern fits cycle skipping in bone. Once the bone travel times are fitted
-a period off, the gradient pushes the soft tissue around the bone, and fat and
-water absorb compensating errors to explain the remaining phase. Compared with
-the KiTS-00136 run (Section~\ref{sec:kits}), s1366 has twice as many elements
-but a coarser final grid (1.5 versus 1.01~mm, 3.9 points per wavelength),
-faster bone (3750 versus 3476~m/s) and thin ribs, all of which make the
-problem harder.
+\subsection{How the setup was reached}
+\label{sec:history}
+
+Table~\ref{tab:history} lists the s1366 runs in order. All used 128 elements
+and started from uniform water unless noted. Until the last three rows, every
+run included the $401^2$, 100--250~kHz stage, and the errors are those of its
+output.
+
+\begin{table}[ht]
+\centering
+\small
+\caption{s1366 runs on the RTX A6000. RMS errors in m/s, interior / soft tissue
+  ($c < 1700$~m/s). Uniform water scores 297 / 54 on the $201^2$ grid.}
+\label{tab:history}
+\begin{tabular}{@{}p{0.6\textwidth}rr@{}}
+\toprule
+Run & Final model & Wall time \\
+\midrule
+4 shots, no regularization, 25--75~kHz coarse band (original code) & 315 / 204 & 6~min \\
+64 shots (original code) & 338 / 252 & 44~min \\
+32 shots, fused code, transmitter-channel fix, Tikhonov $10^{14}$ & 314 / 216 & 7~min \\
+\quad + 10--50~kHz coarse band, Tikhonov $10^{15}$ & 288 / 170 & 7~min \\
+\quad + 256 elements on stages 2--3 & 304 / 195 & 7~min \\
+\quad 128 elements, coarse stage 200 iterations at $10^{-8}$ & 293 / 180 & 8~min \\
+\quad Tikhonov 0 / $10^{14}$ / $10^{14}$ & 353 / 268 & 8~min \\
+\quad Same, started from the true map blurred by 10~mm & 350 / 265 & 8~min \\
+\quad TV 0 / $10^{7}$ / $10^{7}$, stage-3 output & 353 / 269 & 8~min \\
+\quad Same run, stage-2 model & \textbf{185 / 32} & --- \\
+Two stages, 50 stage-2 iterations & 185 / 32 & 2.7~min \\
+Two stages, 200 stage-2 iterations (Section~\ref{sec:s1366}) & \textbf{143 / 37} & 6.4~min \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{itemize}
+  \item \textbf{A batching bug.} Batched runs never excluded the transmitter's
+    own channel from the misfit: the zeroing acted on a copy made by advanced
+    indexing. Every run before the third row is affected, including the KiTS
+    run (Section~\ref{sec:kits}). It was found by a test comparing the batched
+    gradient with an unbatched reference.
+  \item \textbf{Shots and elements.} More shots per iteration did not remove the
+    artifacts. 256 elements removed the radial streaks near the ring, confirming
+    that 128 elements are too sparse at 250~kHz, but the interior did not
+    improve.
+  \item \textbf{Regularization.} Tikhonov at $10^{15}$ suppressed speckle but
+    charged the true model's bone edges about $10^{4}$ on the coarse grid,
+    six times the converged coarse misfit, so it blocked the bone. TV charges
+    jumps linearly and is used instead on stage 2.
+  \item \textbf{The decisive diagnostic.} Saving the model after every stage
+    showed that stages 1 and 2 work and stage 3 fails
+    (Figures~\ref{fig:stages_water} and~\ref{fig:stages_blur}). From uniform
+    water and from a 10~mm-blurred true map alike, the stage-2 model has
+    185--187 / 32--33~m/s error; stage 3 turns both into the same speckled,
+    biased model at about 350 / 265~m/s. The output of stage 3 does not depend
+    on its input.
+\end{itemize}
+
+\begin{figure}[ht]
+  \centering
+  \includegraphics[width=\textwidth]{totalseg_s1366_tv1e7_stages.png}
+  \caption{Run with TV 0 / $10^{7}$ / $10^{7}$ started from uniform water:
+    speed (top) and error (bottom) at the start and after each stage. Stage 2
+    is the result; stage 3 destroys it.}
+  \label{fig:stages_water}
+\end{figure}
+
+\begin{figure}[ht]
+  \centering
+  \includegraphics[width=\textwidth]{totalseg_s1366_blur10_stages.png}
+  \caption{The same diagnostic from the true map blurred by a 10~mm Gaussian
+    (Tikhonov 0 / $10^{14}$ / $10^{14}$). Stages 1 and 2 converge to the same
+    model as the water start; stage 3 again degrades it.}
+  \label{fig:stages_blur}
+\end{figure}
 
 \subsection{Earlier experiment: KiTS-00136 with the HU-threshold model}
 \label{sec:kits}
@@ -666,38 +779,39 @@ this hollow vertebra and only sharpen its rim, which matches
 Figure~\ref{fig:multiscale}. The RMS error is dominated by the bone pixels; the
 difference map is close to zero over most of the soft tissue.
 
-\section{Limitations and next steps}
-
-The main limits are the inverse crime, the bone, and the coarse sampling of the
-abdomen setup.
+\section{Limitations and future work}
+\label{sec:future}
 
 \begin{itemize}
+  \item \textbf{The 100--250~kHz stage (future research).} Run from the stage-2
+    model, the $401^2$ stage cycle-skips: its starting misfit is no lower than
+    from far worse models, and it converges to the same wrong model whatever
+    its input. At 250~kHz a half period is 2~$\mu$s; the stage-2 model's
+    residual errors (about 30~m/s along 200~mm paths, plus the bone) already
+    exceed it. Directions: smaller frequency steps toward 250~kHz (for example
+    100--150, 125--200 and 150--250~kHz); a smaller step size, or L-BFGS with
+    illumination-compensated gradients, since Adam moves every pixel by about
+    its step size even where the gradient is noise; more elements (256 removed
+    the near-ring streaks); and a fourth-order stencil, since the $401^2$
+    s1366 grid has only 3.9 points per shortest wavelength.
+  \item \textbf{Bone.} Bone is located but reaches only about 70\% of its
+    speed, and the soft tissue within 10~mm of it is off by about 120~m/s. Options: a travel-time or envelope misfit, a bone-aware prior (the
+    segmentation marks the bone), or inverting soft tissue with the bone held
+    fixed.
   \item \textbf{Inverse crime.} Observed and predicted data come from the same
     solver on the same grid, with no noise. Results are optimistic; data should
     be generated on a finer grid, or with an independent solver, plus noise.
-  \item \textbf{Bone and cycle skipping.} The $2.5\times$ speed contrast of
-    bone cycle-skips even at 25--75~kHz and, in the s1366 run, leaves the final
-    RMS error above the starting model's. Options: start below 25~kHz, add a
-    travel-time or envelope misfit for the first stage, begin from a
-    bone-aware prior (the segmentation already marks the bone), or invert soft
-    tissue only with the bone held fixed.
-  \item \textbf{Grid resolution.} The abdomen stages run at about 4--6 points
-    per shortest wavelength (3.9 on the s1366 final stage, limited by the
-    1.5~mm CT voxels), low for a second-order scheme; numerical dispersion is
-    masked only because data and model share the grid.
-  \item \textbf{Element count.} 64 elements on a 194~mm ring (19~mm pitch)
-    undersample the wavefield at 100--250~kHz and produce radial streaks. More
-    elements, or more shots per iteration, should reduce them.
+  \item \textbf{Starting model and sampling.} The blurred-truth test shows the
+    two-stage result does not depend on the starting model for this slice.
+    The 128-element ring is adequately sampled up to about 125~kHz; higher
+    frequencies need more elements.
   \item \textbf{Physics.} Constant density, no attenuation and no shear waves.
     Bone and gas are only approximated by a scalar acoustic model. The
     density and attenuation maps written by \code{totalseg\_to\_speed.py} are
     not yet used by the solvers.
-  \item \textbf{Reproducibility.} The commands and logs of both abdomen
-    runs are saved alongside their figures. The KiTS-00136 command was
-    recovered after the fact from shell history.
-  \item \textbf{Memory.} Storing the full forward wavefield (about 3~GB per shot
-    on the $401^2$ abdomen stage) caps the batch size; checkpointing would lift
-    this.
+  \item \textbf{Reproducibility.} The commands and logs of all abdomen runs are
+    saved alongside their figures. The KiTS-00136 command was recovered after
+    the fact from shell history.
 \end{itemize}
 
 \section*{Sources}
@@ -708,9 +822,11 @@ abdomen setup.
     \code{invert\_ring.py}, \code{fdtd2d/torch\_backend.py},
     \code{fdtd2d/inversion/} (CG, misfit, medium), \code{fdtd2d/ct\_medium.py},
     \code{ct\_to\_speed.py}, \code{fdtd2d/inversion/neural.py}.
-  \item s1366 run: \code{totalseg\_s1366\_multiscale.png} and
-    \code{totalseg\_s1366\_multiscale\_log.txt}; converter
-    \code{totalseg\_to\_speed.py} and \code{abdominal\_acoustic\_parameters.csv}.
+  \item Final s1366 run: \code{totalseg\_s1366\_final200\_multiscale.png},
+    \code{totalseg\_s1366\_final200\_log.txt} and the saved models; earlier runs
+    in Table~\ref{tab:history} as \code{totalseg\_s1366\_*} with their logs;
+    converter \code{totalseg\_to\_speed.py} and
+    \code{abdominal\_acoustic\_parameters.csv}.
   \item Abdomen figure \code{abdomenmultiscale.png}, commit \code{2de3791}
     (September 26, 2026), and its log \code{abdomenmultiscale\_log.txt}; CT map
     figure \code{abdomen\_acoustic.png}.
