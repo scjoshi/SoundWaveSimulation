@@ -174,8 +174,11 @@ def parse_args():
         help="Grid boundary margin outside the CT ring (default: 8 pixels).",
     )
     parser.add_argument(
-        "--n-elements", type=int, default=N_ELEMENTS, metavar="N",
-        help=f"Number of ring elements (default: {N_ELEMENTS})",
+        "--n-elements", type=int, nargs="+", default=[N_ELEMENTS], metavar="N",
+        help=(
+            f"Number of ring elements (default: {N_ELEMENTS}). Give one value "
+            "for every stage, or one per multiscale stage, e.g. 128 256 256."
+        ),
     )
     parser.add_argument(
         "--n-shots", type=int, default=4, metavar="K",
@@ -931,7 +934,8 @@ def print_summary(
             print(
                 f"    {report['index']}. {report['grid_size']} x "
                 f"{report['grid_size']}, {report['spacing_mm']:.3g} mm, "
-                f"{report['f_start_khz']:.0f}–{report['f_end_khz']:.0f} kHz"
+                f"{report['f_start_khz']:.0f}–{report['f_end_khz']:.0f} kHz, "
+                f"{report['n_elements']} elements"
             )
             print(
                 f"       observed data {report['observed_s']:.3f} s; "
@@ -954,6 +958,18 @@ def print_summary(
     else:
         print(f"  Shepp–Logan target:              "
               f"c = {C0:.0f}–{C0 + SHEPP_DC:.0f} m/s")
+
+
+def stage_element_counts(n_elements, n_stages):
+    """Ring element count for each stage from one value or one per stage."""
+    if len(n_elements) == 1:
+        return list(n_elements) * n_stages
+    if len(n_elements) != n_stages:
+        raise SystemExit(
+            f"--n-elements needs 1 or {n_stages} values for {n_stages} stage(s); "
+            f"got {len(n_elements)}."
+        )
+    return list(n_elements)
 
 
 def multiscale_stages(enabled, coarse_band_hz=(25.0e3, 75.0e3)):
@@ -979,6 +995,7 @@ def resize_slowness(m, shape):
 def run_inversion_stage(
     args, device, dtype, compile_step, grid_size, spacing, f_start, f_end,
     chirp_duration, initial_m=None, stage_index=1, neural_model=None,
+    n_elements=None,
 ):
     """Generate data and invert one frequency/grid-continuation level.
 
@@ -986,6 +1003,8 @@ def run_inversion_stage(
     slowness; the same network carries over between stages.
     """
     stage_start = time.perf_counter()
+    if n_elements is None:
+        n_elements = args.n_elements[0]
     ct_grid = None
     if args.ct_speed is not None:
         ct_grid = load_ct_ring_grid(
@@ -1027,21 +1046,21 @@ def run_inversion_stage(
 
     model = TorchScalarWave2D(c_true, spacing, spacing, device=device, dtype=dtype)
     solver = TorchFDTD2D(model, dt, compile_step=compile_step)
-    array = RingArray(args.n_elements, ring_radius, x_m, y_m)
+    array = RingArray(n_elements, ring_radius, x_m, y_m)
     sampler = TorchRingSampler(array, device=device, dtype=dtype)
     observed = torch.empty(
-        (args.n_elements, args.n_elements, n_steps), device=device, dtype=dtype
+        (n_elements, n_elements, n_steps), device=device, dtype=dtype
     )
     batch_size = observed_batch_size(
-        args, device, args.n_elements, n_steps, c_true.shape, args.n_elements, dtype,
+        args, device, n_elements, n_steps, c_true.shape, n_elements, dtype,
     )
     print(
         "  Precomputing observed traces "
         f"({batch_size} shots per GPU batch)..."
     )
     batched_solvers = {}
-    for start in range(0, args.n_elements, batch_size):
-        sources = np.arange(start, min(start + batch_size, args.n_elements))
+    for start in range(0, n_elements, batch_size):
+        sources = np.arange(start, min(start + batch_size, n_elements))
         rows_cols = [array.inject_rows_cols(int(tx)) for tx in sources]
         rows = np.asarray([row for row, _ in rows_cols], dtype=np.int64)
         cols = np.asarray([col for _, col in rows_cols], dtype=np.int64)
@@ -1118,6 +1137,7 @@ def run_inversion_stage(
         "spacing_mm": 1.0e3 * spacing,
         "f_start_khz": f_start / 1.0e3,
         "f_end_khz": f_end / 1.0e3,
+        "n_elements": n_elements,
         "observed_s": observed_time_s,
         "optimization_s": optimization_time_s,
         "total_s": time.perf_counter() - stage_start,
@@ -1175,9 +1195,9 @@ def main():
     if args.replot is not None:
         replot(args)
         return
-    if args.n_elements < 2:
+    if min(args.n_elements) < 2:
         raise SystemExit("Need at least 2 ring elements.")
-    validate_shot_count(args.n_elements, args.n_shots)
+    validate_shot_count(min(args.n_elements), args.n_shots)
     if args.store_every < 1:
         raise SystemExit("--store-every must be at least 1.")
     if not 0.0 < args.coarse_band[0] < args.coarse_band[1]:
@@ -1241,11 +1261,14 @@ def main():
     )
     if args.coarse_only:
         stages = stages[:1]
-    for stage_index, stage in enumerate(stages, start=1):
+    element_counts = stage_element_counts(args.n_elements, len(stages))
+    for stage_index, (stage, n_elements) in enumerate(
+        zip(stages, element_counts), start=1
+    ):
         grid_size, spacing, f_start, f_end, duration = stage
         print(
             f"Stage {stage_index}/{len(stages)}: {grid_size} x {grid_size}, "
-            f"{f_start / 1e3:.0f}–{f_end / 1e3:.0f} kHz"
+            f"{f_start / 1e3:.0f}–{f_end / 1e3:.0f} kHz, {n_elements} elements"
         )
         (
             c_true, c_est, transferred_m, mask, history, problem, array,
@@ -1253,7 +1276,7 @@ def main():
         ) = run_inversion_stage(
             args, device, dtype, compile_step, grid_size, spacing, f_start,
             f_end, duration, initial_m=transferred_m, stage_index=stage_index,
-            neural_model=neural_model,
+            neural_model=neural_model, n_elements=n_elements,
         )
         stage_reports.append(stage_report)
     wall_time_s = time.perf_counter() - wall_time_start
@@ -1262,7 +1285,7 @@ def main():
         c_est,
         mask,
         history,
-        args.n_elements,
+        array.n_elements,
         args.n_shots,
         problem.source_history,
         args.shot_seed,
