@@ -44,6 +44,7 @@ from fdtd2d.torch_backend import (
     TorchFDTD2DBatch,
     TorchRingSampler,
     TorchScalarWave2D,
+    auto_batch_size,
     configure_runtime,
     device_summary,
     linear_chirp,
@@ -69,6 +70,69 @@ CHIRP_DURATION = 20.0e-6
 
 PHANTOM_RADIUS = 0.020
 PHANTOM_C = 1800.0
+
+
+WAVE_DTYPES = {"float32": torch.float32, "float16": torch.float16,
+               "bfloat16": torch.bfloat16}
+
+
+def parallel_shots_arg(value):
+    if value == "auto":
+        return value
+    try:
+        shots = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("expected a positive integer or 'auto'") from None
+    if shots < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return shots
+
+
+def add_batching_arguments(parser):
+    """GPU batching and wavefield-storage options shared with invert_arc.py."""
+    parser.add_argument(
+        "--parallel-shots", type=parallel_shots_arg, default="auto", metavar="N",
+        help=(
+            "Maximum independent shots per GPU batch for observed and "
+            "inversion modeling. 'auto' (default) sizes each stage's batches "
+            "from free GPU memory; on CPU it means 16."
+        ),
+    )
+    parser.add_argument(
+        "--store-every", type=int, default=1, metavar="K",
+        help=(
+            "Keep every K-th forward wavefield for the gradient (default: 1, "
+            "exact). K > 1 cuts wavefield memory and imaging work K-fold; "
+            "keep K * dt well below a quarter period of the highest frequency."
+        ),
+    )
+    parser.add_argument(
+        "--wave-dtype", choices=tuple(WAVE_DTYPES), default=None,
+        help=(
+            "Storage precision of the forward wavefields kept for the gradient "
+            "(default: the propagation --dtype). float16 halves their memory."
+        ),
+    )
+
+
+def batching_options(args):
+    """Keyword arguments for TorchLeastSquaresFWI from the batching options."""
+    return {
+        "parallel_shots": args.parallel_shots,
+        "store_every": args.store_every,
+        "wave_dtype": None if args.wave_dtype is None else WAVE_DTYPES[args.wave_dtype],
+    }
+
+
+def observed_batch_size(args, device, n_transmitters, n_steps, grid_shape,
+                        n_receivers, dtype):
+    """Shots per batch for the forward-only observed-data simulation."""
+    if args.parallel_shots != "auto":
+        return min(args.parallel_shots, n_transmitters)
+    return auto_batch_size(
+        device, n_transmitters,
+        observed_bytes_per_shot(n_steps, grid_shape, n_receivers, dtype),
+    )
 
 
 def parse_args():
@@ -117,13 +181,7 @@ def parse_args():
         "--n-shots", type=int, default=4, metavar="K",
         help="Random transmitters per gradient evaluation (default: 4)",
     )
-    parser.add_argument(
-        "--parallel-shots", type=int, default=16, metavar="N",
-        help=(
-            "Maximum independent shots per GPU batch for observed and "
-            "inversion modeling (default: 16)."
-        ),
-    )
+    add_batching_arguments(parser)
     parser.add_argument(
         "--shot-seed",
         type=int,
@@ -307,31 +365,64 @@ def forward_store(solver, sampler, array, pulse, tx, n_steps):
 
 
 def forward_store_batch(
-    solver, sampler, array, source_values, sources, n_steps, batched
+    solver, sampler, array, source_values, sources, n_steps, batched,
+    store_every=1, wave_dtype=None,
 ):
-    """Forward-model independent sources together and retain their histories."""
+    """Forward-model independent sources together and retain their histories.
+
+    Returns traces ``(shots, receivers, steps)`` and the stored wavefields
+    ``(stored steps, shots, ny, nx)``: every ``store_every``-th step, cast to
+    ``wave_dtype`` (default: the propagation dtype).
+    """
     rows_cols = [array.inject_rows_cols(int(tx)) for tx in sources]
     rows = np.asarray([row for row, _ in rows_cols], dtype=np.int64)
     cols = np.asarray([col for _, col in rows_cols], dtype=np.int64)
     batched.set_sources(rows, cols)
     batched.reset()
     n_batch = len(sources)
-    traces = torch.empty(
-        (n_batch, sampler.n_elements, n_steps),
+    samples = torch.empty(
+        (n_steps, n_batch, sampler.n_elements),
         device=solver.model.device,
         dtype=solver.model.dtype,
     )
     wave = torch.empty(
-        (n_batch, n_steps, *solver.model.shape),
+        (stored_steps(n_steps, store_every), n_batch, *solver.model.shape),
         device=solver.model.device,
-        dtype=solver.model.dtype,
+        dtype=solver.model.dtype if wave_dtype is None else wave_dtype,
     )
     with torch.inference_mode():
         for step in range(n_steps):
-            fields = batched.step(source_values[step])
-            traces[:, :, step] = sampler.record_batch(fields)
-            wave[:, step].copy_(fields)
+            fields, step_samples = batched.step_record(source_values[step], sampler)
+            samples[step].copy_(step_samples)
+            if step % store_every == 0:
+                wave[step // store_every].copy_(fields)
+        traces = samples.permute(1, 2, 0).contiguous()
     return traces, wave
+
+
+def stored_steps(n_steps, store_every):
+    """Number of wavefield snapshots kept when storing every k-th step."""
+    return -(-int(n_steps) // int(store_every))
+
+
+def gradient_bytes_per_shot(n_steps, grid_shape, n_receivers, store_every,
+                            wave_dtype, dtype):
+    """Approximate device memory one gradient shot needs."""
+    cells = grid_shape[0] * grid_shape[1]
+    wave_bytes = torch.empty((), dtype=wave_dtype).element_size()
+    field_bytes = torch.empty((), dtype=dtype).element_size()
+    return (
+        stored_steps(n_steps, store_every) * cells * wave_bytes
+        + 12 * cells * field_bytes          # leapfrog states, copies, temporaries
+        + 4 * n_steps * n_receivers * field_bytes  # traces and residuals
+    )
+
+
+def observed_bytes_per_shot(n_steps, grid_shape, n_receivers, dtype):
+    """Approximate device memory one forward-only (observed-data) shot needs."""
+    cells = grid_shape[0] * grid_shape[1]
+    field_bytes = torch.empty((), dtype=dtype).element_size()
+    return 12 * cells * field_bytes + 3 * n_steps * n_receivers * field_bytes
 
 
 class TorchLeastSquaresFWI:
@@ -354,6 +445,8 @@ class TorchLeastSquaresFWI:
         shot_seed=0,
         parallel_shots=16,
         batched_solvers=None,
+        store_every=1,
+        wave_dtype=None,
     ):
         self.solver = solver
         self.model = solver.model
@@ -373,6 +466,18 @@ class TorchLeastSquaresFWI:
         if observed.shape[0] != array.n_elements:
             raise ValueError("Observed data must contain one gather per transmitter.")
         self.observed = observed
+        self.store_every = int(store_every)
+        if self.store_every < 1:
+            raise ValueError("store_every must be positive.")
+        self.wave_dtype = solver.model.dtype if wave_dtype is None else wave_dtype
+        if parallel_shots == "auto":
+            parallel_shots = auto_batch_size(
+                solver.model.device, self.n_shots,
+                gradient_bytes_per_shot(
+                    self.n_steps, self.model.shape, sampler.n_elements,
+                    self.store_every, self.wave_dtype, self.model.dtype,
+                ),
+            )
         self.parallel_shots = int(parallel_shots)
         if self.parallel_shots < 1:
             raise ValueError("parallel_shots must be positive.")
@@ -380,7 +485,6 @@ class TorchLeastSquaresFWI:
         self._batched_solvers = (
             {} if batched_solvers is None else batched_solvers
         )
-        self._adjoint_sources = {}
         self._shot_rng = np.random.default_rng(shot_seed)
         self.active_sources = None
         self.source_history = []
@@ -442,7 +546,7 @@ class TorchLeastSquaresFWI:
         residual = predicted - observed
         batches = torch.arange(len(sources), device=predicted.device)
         transmitters = torch.as_tensor(sources, device=predicted.device)
-        residual[batches, transmitters].zero_()
+        residual[batches, transmitters] = 0.0  # in place; .zero_() would clear a copy
         return residual
 
     def misfit(self, m):
@@ -464,9 +568,9 @@ class TorchLeastSquaresFWI:
                 torch.as_tensor(shot_batch, device=self.model.device)
             ]
             residual = self._residual_batch(predicted, observed, shot_batch)
-            value += 0.5 * float(torch.sum(residual.square()).item())
+            value = value + 0.5 * torch.sum(residual.square())
         regularization, _ = tikhonov(m, self.mask, self.alpha)
-        return value + regularization
+        return float(value) + regularization
 
     def misfit_and_grad(self, m):
         m = self.apply_medium(m)
@@ -479,14 +583,17 @@ class TorchLeastSquaresFWI:
             batched = self._batched_solver(len(shot_batch))
             predicted, wave = forward_store_batch(
                 self.solver, self.sampler, self.array, self.source_values, shot_batch,
-                self.n_steps, batched,
+                self.n_steps, batched, self.store_every, self.wave_dtype,
             )
             observed = self.observed[
                 torch.as_tensor(shot_batch, device=self.model.device)
             ]
             residual = self._residual_batch(predicted, observed, shot_batch)
-            value += 0.5 * float(torch.sum(residual.square()).item())
-            self._adjoint_accumulate_batch(batched, wave, residual, g_c2)
+            value = value + 0.5 * torch.sum(residual.square())
+            del predicted
+            g_c2 = self._adjoint_accumulate_batch(batched, wave, residual, g_c2)
+            del wave
+        value = float(value)
         regularization, g_regularization = tikhonov(m, self.mask, self.alpha)
         gradient = -g_c2.detach().cpu().numpy().astype(float) / (m * m)
         gradient += g_regularization
@@ -509,22 +616,24 @@ class TorchLeastSquaresFWI:
                 g_c2.addcmul_(adjoint_field, laplacian, value=dt2)
 
     def _adjoint_accumulate_batch(self, batched, wave, residual, g_c2):
-        """Run one independent adjoint per batch member and sum its gradient."""
+        """Run one independent adjoint per batch member; return the summed gradient.
+
+        The imaging condition dt^2 sum_n lambda^n L[u^(n-1)] is evaluated on
+        the stored forward steps only, weighted by ``store_every``.
+        """
         batched.reset()
-        source = self._adjoint_sources.get(batched.n_shots)
-        if source is None:
-            source = torch.empty_like(batched.u)
-            self._adjoint_sources[batched.n_shots] = source
+        residual = residual.permute(2, 0, 1).contiguous()  # (steps, shots, receivers)
+        scale = self.store_every * batched.dt2
         with torch.inference_mode():
             for n in range(self.n_steps - 1, -1, -1):
-                self.sampler.record_adjoint_batch(residual[:, :, n], out=source)
-                adjoint_fields = batched.adjoint_step(source)
-                if n == 0:
-                    continue
-                laplacian = torch.nn.functional.conv2d(
-                    wave[:, n - 1, None], self.model.laplacian_kernel, padding=1
-                )[:, 0]
-                g_c2.add_((adjoint_fields * laplacian).sum(dim=0), alpha=batched.dt2)
+                if n > 0 and (n - 1) % self.store_every == 0:
+                    g_c2 = batched.adjoint_step_image(
+                        residual[n], self.sampler,
+                        wave[(n - 1) // self.store_every], g_c2, scale,
+                    )
+                else:
+                    batched.adjoint_step_residual(residual[n], self.sampler)
+        return g_c2
 
 
 def run_torch_gradient_check(device, dtype, compile_step, seed=0):
@@ -911,30 +1020,31 @@ def run_inversion_stage(
     solver = TorchFDTD2D(model, dt, compile_step=compile_step)
     array = RingArray(args.n_elements, ring_radius, x_m, y_m)
     sampler = TorchRingSampler(array, device=device, dtype=dtype)
-    observed_batch_size = min(args.parallel_shots, args.n_elements)
-    print(
-        "  Precomputing observed traces "
-        f"({observed_batch_size} shots per GPU batch)..."
-    )
     observed = torch.empty(
         (args.n_elements, args.n_elements, n_steps), device=device, dtype=dtype
     )
+    batch_size = observed_batch_size(
+        args, device, args.n_elements, n_steps, c_true.shape, args.n_elements, dtype,
+    )
+    print(
+        "  Precomputing observed traces "
+        f"({batch_size} shots per GPU batch)..."
+    )
     batched_solvers = {}
-    for start in range(0, args.n_elements, observed_batch_size):
-        sources = np.arange(start, min(start + observed_batch_size, args.n_elements))
+    for start in range(0, args.n_elements, batch_size):
+        sources = np.arange(start, min(start + batch_size, args.n_elements))
         rows_cols = [array.inject_rows_cols(int(tx)) for tx in sources]
         rows = np.asarray([row for row, _ in rows_cols], dtype=np.int64)
         cols = np.asarray([col for _, col in rows_cols], dtype=np.int64)
-        batch_size = len(sources)
-        batched = batched_solvers.get(batch_size)
+        batched = batched_solvers.get(len(sources))
         if batched is None:
-            batched = TorchFDTD2DBatch(solver, batch_size)
-            batched_solvers[batch_size] = batched
+            batched = TorchFDTD2DBatch(solver, len(sources))
+            batched_solvers[len(sources)] = batched
         traces, _ = simulate_shots_batch(
             solver, sampler, pulse, rows, cols, n_steps, batched=batched,
             source_values=source_values,
         )
-        observed[start:start + batch_size].copy_(traces)
+        observed[start:start + len(sources)].copy_(traces)
     observed_time_s = time.perf_counter() - stage_start
 
     mask = interior_mask(
@@ -945,8 +1055,13 @@ def run_inversion_stage(
         solver, sampler, array, pulse, n_steps, args.n_shots, observed, mask,
         alpha=args.reg, c_min=args.c_min, c_max=args.c_max,
         c_background=background_speed,
-        shot_seed=args.shot_seed, parallel_shots=args.parallel_shots,
-        batched_solvers=batched_solvers,
+        shot_seed=args.shot_seed, batched_solvers=batched_solvers,
+        **batching_options(args),
+    )
+    print(
+        f"  Gradient: {problem.n_shots} shots in batches of {problem.parallel_shots}; "
+        f"wavefield every {problem.store_every} step(s) as "
+        f"{str(problem.wave_dtype).removeprefix('torch.')}"
     )
     if initial_m is None:
         m0 = np.full(c_true.shape, m_from_c(background_speed))
@@ -1054,8 +1169,8 @@ def main():
     if args.n_elements < 2:
         raise SystemExit("Need at least 2 ring elements.")
     validate_shot_count(args.n_elements, args.n_shots)
-    if args.parallel_shots < 1:
-        raise SystemExit("--parallel-shots must be at least 1.")
+    if args.store_every < 1:
+        raise SystemExit("--store-every must be at least 1.")
     if args.ring_clearance_mm <= 0:
         raise SystemExit("--ring-clearance-mm must be positive.")
     if args.ct_padding_speed <= 0:

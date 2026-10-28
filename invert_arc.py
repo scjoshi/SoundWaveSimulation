@@ -68,8 +68,11 @@ from invert_ring import (
     IterationVisualizer,
     TorchLeastSquaresFWI,
     adam,
+    add_batching_arguments,
+    batching_options,
     fixed_step_gradient_descent,
     multiscale_stages,
+    observed_batch_size,
     resize_slowness,
     rms_c_error,
 )
@@ -149,13 +152,7 @@ def parse_args():
         "--n-shots", type=int, default=8, metavar="K",
         help="Random transmitters per gradient evaluation (default: 8)",
     )
-    parser.add_argument(
-        "--parallel-shots", type=int, default=16, metavar="N",
-        help=(
-            "Maximum independent shots per GPU batch for observed and "
-            "inversion modeling (default: 16)."
-        ),
-    )
+    add_batching_arguments(parser)
     parser.add_argument(
         "--shot-seed",
         type=int,
@@ -570,13 +567,13 @@ def run_inversion_stage(
     model = TorchScalarWave2D(c_true, spacing, spacing, device=device, dtype=dtype)
     solver = TorchFDTD2D(model, dt, compile_step=compile_step)
     sampler = TorchRingSampler(rx_array, device=device, dtype=dtype)
-    print(
-        "  Precomputing observed traces "
-        f"({min(args.parallel_shots, args.n_tx)} shots per GPU batch)..."
+    batch_size = observed_batch_size(
+        args, device, args.n_tx, n_steps, c_true.shape, rx_array.n_elements, dtype,
     )
+    print(f"  Precomputing observed traces ({batch_size} shots per GPU batch)...")
     batched_solvers = {}
     observed = simulate_observed(solver, sampler, tx_array, pulse, source_values, n_steps,
-                                 args.parallel_shots, batched_solvers)
+                                 batch_size, batched_solvers)
     observed_time_s = time.perf_counter() - stage_start
 
     mask = interior_mask(
@@ -586,8 +583,13 @@ def run_inversion_stage(
         solver, sampler, tx_array, pulse, n_steps, args.n_shots, observed, mask,
         alpha=args.reg, c_min=args.c_min, c_max=args.c_max,
         c_background=background_speed,
-        shot_seed=args.shot_seed, parallel_shots=args.parallel_shots,
-        batched_solvers=batched_solvers,
+        shot_seed=args.shot_seed, batched_solvers=batched_solvers,
+        **batching_options(args),
+    )
+    print(
+        f"  Gradient: {problem.n_shots} shots in batches of {problem.parallel_shots}; "
+        f"wavefield every {problem.store_every} step(s) as "
+        f"{str(problem.wave_dtype).removeprefix('torch.')}"
     )
     if initial_m is None:
         m0 = np.full(c_true.shape, m_from_c(background_speed))
@@ -655,8 +657,8 @@ def main():
         raise SystemExit("Transmit and receive spans must total less than 360°.")
     if args.radius_mm <= 0:
         raise SystemExit("--radius-mm must be positive.")
-    if args.parallel_shots < 1:
-        raise SystemExit("--parallel-shots must be at least 1.")
+    if args.store_every < 1:
+        raise SystemExit("--store-every must be at least 1.")
     if args.ring_clearance_mm <= 0:
         raise SystemExit("--ring-clearance-mm must be positive.")
     if args.ct_padding_speed <= 0:

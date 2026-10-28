@@ -360,6 +360,10 @@ class TorchRingSampler:
             value = torch.as_tensor(getattr(ring_array, name), device=device, dtype=dtype)
             setattr(self, name, value)
         self._batch_indices = {}
+        self.receivers = (
+            self._row0, self._row1, self._col0, self._col1,
+            self._w00, self._w10, self._w01, self._w11,
+        )
 
     def record(self, field):
         return (
@@ -470,6 +474,22 @@ def simulate_shot(
     return traces, snapshots
 
 
+def _apply_mur_batch(
+    u, u_next, k_left, k_right, k_bottom, k_top, corner_rows, corner_cols,
+    corner_rows_in, corner_cols_in, corner_kx, corner_ky,
+):
+    """First-order Mur edges and averaged corners for a ``(shots, ny, nx)`` batch."""
+    u_next[:, 1:-1, 0] = u[:, 1:-1, 1] + k_left * (u_next[:, 1:-1, 1] - u[:, 1:-1, 0])
+    u_next[:, 1:-1, -1] = u[:, 1:-1, -2] + k_right * (u_next[:, 1:-1, -2] - u[:, 1:-1, -1])
+    u_next[:, 0, 1:-1] = u[:, 1, 1:-1] + k_bottom * (u_next[:, 1, 1:-1] - u[:, 0, 1:-1])
+    u_next[:, -1, 1:-1] = u[:, -2, 1:-1] + k_top * (u_next[:, -2, 1:-1] - u[:, -1, 1:-1])
+    corner_u = u[:, corner_rows, corner_cols]
+    from_x = u[:, corner_rows, corner_cols_in] + corner_kx * (u_next[:, corner_rows, corner_cols_in] - corner_u)
+    from_y = u[:, corner_rows_in, corner_cols] + corner_ky * (u_next[:, corner_rows_in, corner_cols] - corner_u)
+    u_next[:, corner_rows, corner_cols] = 0.5 * (from_x + from_y)
+    return u_next
+
+
 def _advance_field_batch(
     u_old,
     u,
@@ -495,28 +515,10 @@ def _advance_field_batch(
     laplacian = functional.conv2d(u[:, None], kernel, padding=1)[:, 0]
     u_next = 2.0 * u - u_old + dt2 * c2 * laplacian
     u_next[batch_indices, source_rows, source_cols] += source_value
-
-    u_next[:, 1:-1, 0] = u[:, 1:-1, 1] + k_left * (
-        u_next[:, 1:-1, 1] - u[:, 1:-1, 0]
+    u_next = _apply_mur_batch(
+        u, u_next, k_left, k_right, k_bottom, k_top, corner_rows, corner_cols,
+        corner_rows_in, corner_cols_in, corner_kx, corner_ky,
     )
-    u_next[:, 1:-1, -1] = u[:, 1:-1, -2] + k_right * (
-        u_next[:, 1:-1, -2] - u[:, 1:-1, -1]
-    )
-    u_next[:, 0, 1:-1] = u[:, 1, 1:-1] + k_bottom * (
-        u_next[:, 1, 1:-1] - u[:, 0, 1:-1]
-    )
-    u_next[:, -1, 1:-1] = u[:, -2, 1:-1] + k_top * (
-        u_next[:, -2, 1:-1] - u[:, -1, 1:-1]
-    )
-
-    corner_u = u[:, corner_rows, corner_cols]
-    from_x = u[:, corner_rows, corner_cols_in] + corner_kx * (
-        u_next[:, corner_rows, corner_cols_in] - corner_u
-    )
-    from_y = u[:, corner_rows_in, corner_cols] + corner_ky * (
-        u_next[:, corner_rows_in, corner_cols] - corner_u
-    )
-    u_next[:, corner_rows, corner_cols] = 0.5 * (from_x + from_y)
     return u, u_next
 
 
@@ -528,15 +530,72 @@ def _advance_adjoint_field_batch(
     """Batched adjoint update with one dense residual source per shot."""
     laplacian = functional.conv2d((c2 * u)[:, None], kernel, padding=1)[:, 0]
     u_next = 2.0 * u - u_old + dt2 * laplacian + source_fields
-    u_next[:, 1:-1, 0] = u[:, 1:-1, 1] + k_left * (u_next[:, 1:-1, 1] - u[:, 1:-1, 0])
-    u_next[:, 1:-1, -1] = u[:, 1:-1, -2] + k_right * (u_next[:, 1:-1, -2] - u[:, 1:-1, -1])
-    u_next[:, 0, 1:-1] = u[:, 1, 1:-1] + k_bottom * (u_next[:, 1, 1:-1] - u[:, 0, 1:-1])
-    u_next[:, -1, 1:-1] = u[:, -2, 1:-1] + k_top * (u_next[:, -2, 1:-1] - u[:, -1, 1:-1])
-    corner_u = u[:, corner_rows, corner_cols]
-    from_x = u[:, corner_rows, corner_cols_in] + corner_kx * (u_next[:, corner_rows, corner_cols_in] - corner_u)
-    from_y = u[:, corner_rows_in, corner_cols] + corner_ky * (u_next[:, corner_rows_in, corner_cols] - corner_u)
-    u_next[:, corner_rows, corner_cols] = 0.5 * (from_x + from_y)
+    u_next = _apply_mur_batch(
+        u, u_next, k_left, k_right, k_bottom, k_top, corner_rows, corner_cols,
+        corner_rows_in, corner_cols_in, corner_kx, corner_ky,
+    )
     return u, u_next
+
+
+def _gather_receivers(fields, receivers):
+    """Bilinear receiver samples ``(shots, receivers)`` of a field batch."""
+    row0, row1, col0, col1, w00, w10, w01, w11 = receivers
+    return (
+        fields[:, row0, col0] * w00
+        + fields[:, row0, col1] * w10
+        + fields[:, row1, col0] * w01
+        + fields[:, row1, col1] * w11
+    )
+
+
+def _forward_record_batch(
+    u_old, u, c2, kernel, source_value, source_rows, source_cols, batch_indices,
+    boundary, receivers, dt2: float,
+):
+    """One forward step fused with the receiver gather."""
+    u, u_next = _advance_field_batch(
+        u_old, u, c2, kernel, source_value, source_rows, source_cols,
+        batch_indices, *boundary, dt2,
+    )
+    return u, u_next, _gather_receivers(u_next, receivers)
+
+
+def _adjoint_inject_batch(
+    u_old, u, c2, kernel, residual, batch_indices, boundary, receivers,
+    dt2: float,
+):
+    """One adjoint step fused with the scatter of receiver residuals.
+
+    The scatter is the exact transpose of ``_gather_receivers``.
+    """
+    row0, row1, col0, col1, w00, w10, w01, w11 = receivers
+    shots = batch_indices[:, None]
+    source = torch.zeros_like(u)
+    source.index_put_((shots, row0[None], col0[None]), residual * w00, accumulate=True)
+    source.index_put_((shots, row0[None], col1[None]), residual * w10, accumulate=True)
+    source.index_put_((shots, row1[None], col0[None]), residual * w01, accumulate=True)
+    source.index_put_((shots, row1[None], col1[None]), residual * w11, accumulate=True)
+    return _advance_adjoint_field_batch(
+        u_old, u, c2, kernel, source, *boundary, dt2,
+    )
+
+
+def _adjoint_image_batch(
+    u_old, u, c2, kernel, residual, batch_indices, boundary, receivers,
+    forward_field, gradient, dt2: float, scale: float,
+):
+    """Adjoint step plus ``gradient += scale * sum_shots(adjoint * L[forward])``.
+
+    ``forward_field`` may be stored at reduced precision; it is promoted to
+    the propagation dtype before the Laplacian.
+    """
+    u, u_next = _adjoint_inject_batch(
+        u_old, u, c2, kernel, residual, batch_indices, boundary, receivers, dt2,
+    )
+    laplacian = functional.conv2d(
+        forward_field.to(u.dtype)[:, None], kernel, padding=1
+    )[:, 0]
+    return u, u_next, gradient + scale * (u_next * laplacian).sum(dim=0)
 
 
 class TorchFDTD2DBatch:
@@ -565,13 +624,27 @@ class TorchFDTD2DBatch:
         self.compiled = solver.compiled
         self._advance = _advance_field_batch
         self._advance_adjoint = _advance_adjoint_field_batch
+        self._forward_record = _forward_record_batch
+        self._adjoint_inject = _adjoint_inject_batch
+        self._adjoint_image = _adjoint_image_batch
         if self.compiled:
-            self._advance = torch.compile(
-                _advance_field_batch, mode="reduce-overhead", fullgraph=True
-            )
-            self._advance_adjoint = torch.compile(
-                _advance_adjoint_field_batch, mode="reduce-overhead", fullgraph=True
-            )
+            def compile_step(function):
+                return torch.compile(function, mode="reduce-overhead", fullgraph=True)
+
+            self._advance = compile_step(_advance_field_batch)
+            self._advance_adjoint = compile_step(_advance_adjoint_field_batch)
+            self._forward_record = compile_step(_forward_record_batch)
+            self._adjoint_inject = compile_step(_adjoint_inject_batch)
+            self._adjoint_image = compile_step(_adjoint_image_batch)
+
+    @property
+    def _boundary(self):
+        solver = self._solver
+        return (
+            solver.k_left, solver.k_right, solver.k_bottom, solver.k_top,
+            solver.corner_rows, solver.corner_cols, solver.corner_rows_in,
+            solver.corner_cols_in, solver.corner_kx, solver.corner_ky,
+        )
 
     def reset(self):
         with torch.inference_mode():
@@ -603,6 +676,47 @@ class TorchFDTD2DBatch:
             self.u_old = self.u_old.clone()
             self.u = self.u.clone()
         return self.u
+
+    def step_record(self, source_value, sampler):
+        """Advance every shot one step and return its receiver samples."""
+        self.u_old, self.u, samples = self._forward_record(
+            self.u_old, self.u, self.model.c2, self.model.laplacian_kernel,
+            source_value, self.source_rows, self.source_cols, self.batch_indices,
+            self._boundary, sampler.receivers, self.dt2,
+        )
+        if self.compiled:
+            self.u_old = self.u_old.clone()
+            self.u = self.u.clone()
+            samples = samples.clone()
+        return self.u, samples
+
+    def adjoint_step_residual(self, residual, sampler):
+        """Adjoint step driven by ``(shots, receivers)`` residual samples."""
+        self.u_old, self.u = self._adjoint_inject(
+            self.u_old, self.u, self.model.c2, self.model.laplacian_kernel,
+            residual, self.batch_indices, self._boundary, sampler.receivers,
+            self.dt2,
+        )
+        if self.compiled:
+            self.u_old = self.u_old.clone()
+            self.u = self.u.clone()
+        return self.u
+
+    def adjoint_step_image(self, residual, sampler, forward_field, gradient, scale):
+        """Adjoint step that also adds ``scale * sum(adjoint * L[forward_field])``.
+
+        Returns the updated gradient; ``gradient`` itself is not modified.
+        """
+        self.u_old, self.u, gradient = self._adjoint_image(
+            self.u_old, self.u, self.model.c2, self.model.laplacian_kernel,
+            residual, self.batch_indices, self._boundary, sampler.receivers,
+            forward_field, gradient, self.dt2, float(scale),
+        )
+        if self.compiled:
+            self.u_old = self.u_old.clone()
+            self.u = self.u.clone()
+            gradient = gradient.clone()
+        return gradient
 
     def adjoint_step(self, source_fields):
         self.u_old, self.u = self._advance_adjoint(
@@ -636,11 +750,6 @@ def simulate_shots_batch(
         raise ValueError("Batched solver size does not match the source batch.")
     batched.set_sources(source_rows, source_cols)
     batched.reset()
-    traces = torch.empty(
-        (batched.n_shots, sampler.n_elements, n_steps),
-        device=solver.model.device,
-        dtype=solver.model.dtype,
-    )
     if source_values is None:
         source_values = torch.zeros(
             n_steps, device=solver.model.device, dtype=solver.model.dtype
@@ -648,8 +757,33 @@ def simulate_shots_batch(
         source_values[:pulse.numel()].copy_(pulse)
     elif tuple(source_values.shape) != (n_steps,):
         raise ValueError("source_values must contain one value per time step.")
+    samples = torch.empty(
+        (n_steps, batched.n_shots, sampler.n_elements),
+        device=solver.model.device,
+        dtype=solver.model.dtype,
+    )
     with torch.inference_mode():
         for step in range(n_steps):
-            fields = batched.step(source_values[step])
-            traces[:, :, step] = sampler.record_batch(fields)
+            _, step_samples = batched.step_record(source_values[step], sampler)
+            samples[step].copy_(step_samples)
+        traces = samples.permute(1, 2, 0).contiguous()
     return traces, batched.u
+
+
+def auto_batch_size(device, n_shots, bytes_per_shot, fallback=16, memory_fraction=0.75):
+    """Largest even split of ``n_shots`` whose working set fits in device memory.
+
+    On CUDA the budget is ``memory_fraction`` of the free device memory plus
+    memory PyTorch has cached but not allocated. Other devices use
+    ``fallback`` shots per batch.
+    """
+    device = torch.device(device)
+    if device.type != "cuda":
+        limit = fallback
+    else:
+        free, _ = torch.cuda.mem_get_info(device)
+        cached = torch.cuda.memory_reserved(device) - torch.cuda.memory_allocated(device)
+        limit = int(memory_fraction * (free + cached) // max(int(bytes_per_shot), 1))
+    limit = max(1, min(int(n_shots), limit))
+    n_batches = -(-int(n_shots) // limit)
+    return -(-int(n_shots) // n_batches)
