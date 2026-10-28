@@ -211,17 +211,15 @@ def parse_args():
         action="store_true",
         help=(
             "Use coarse-to-fine stages: 101 x 101 at 25–75 kHz (see "
-            "--coarse-band), 201 x 201 at 50–125 kHz, and optionally 401 x 401 "
-            "at 100–250 kHz (see --stages)."
+            "--coarse-band), 201 x 201 at 50–125 kHz and 401 x 401 at "
+            "100–250 kHz (see --stages)."
         ),
     )
     parser.add_argument(
-        "--stages", type=int, choices=(1, 2, 3), default=2, metavar="N",
+        "--stages", type=int, choices=(1, 2, 3), default=3, metavar="N",
         help=(
-            "Number of multiscale stages to run (default: 2). The 201 x 201 "
-            "stage-2 model is the result. Stage 3 (401 x 401, 100–250 kHz) is "
-            "experimental: started from the stage-2 model it cycle-skips and "
-            "degrades the reconstruction."
+            "Number of multiscale stages to run (default: 3). --stages 2 stops "
+            "after the 201 x 201, 50–125 kHz stage."
         ),
     )
     parser.add_argument(
