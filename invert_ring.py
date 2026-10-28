@@ -228,6 +228,27 @@ def parse_args():
         help="Save the inversion dashboard as an image",
     )
     parser.add_argument(
+        "--save-model", type=Path, metavar="PATH",
+        help="Save true/reconstructed speed, mask, geometry and misfit to a .npz",
+    )
+    parser.add_argument(
+        "--replot", type=Path, metavar="PATH",
+        help="Redraw the dashboard from a --save-model .npz and exit (no inversion)",
+    )
+    parser.add_argument(
+        "--display-range", type=float, nargs=2, metavar=("LOW", "HIGH"),
+        help="Speed colour scale in m/s, e.g. 1420 1620 for soft tissue; "
+             "values outside saturate (default: data range)",
+    )
+    parser.add_argument(
+        "--display-diff", type=float, metavar="M/S",
+        help="Symmetric colour limit for the difference panel (default: data range)",
+    )
+    parser.add_argument(
+        "--crop-to-ring", action="store_true",
+        help="Zoom the dashboard to the ring instead of the whole grid",
+    )
+    parser.add_argument(
         "--no-show", action="store_true",
         help="Run without opening windows",
     )
@@ -984,8 +1005,52 @@ def run_inversion_stage(
     )
 
 
+def dashboard(args, c_true, c_est, history, x_m, y_m, array, mask, optimizer):
+    """Build the inversion dashboard with the display options in ``args``."""
+    return plot_inversion(
+        c_true, c_est, history, x_m, y_m, array, mask=mask, optimizer=optimizer,
+        c_range=args.display_range, diff_range=args.display_diff,
+        crop_m=1.08 * array.radius_m if args.crop_to_ring else None,
+    )
+
+
+def save_model(path, c_true, c_est, history, x_m, y_m, array, mask, optimizer):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        path, c_true=c_true, c_est=c_est, mask=mask, x_m=x_m, y_m=y_m,
+        element_x=array.x, element_y=array.y, ring_radius_m=array.radius_m,
+        ring_center=np.asarray(array.center), misfit=np.asarray(history["misfit"]),
+        optimizer=np.asarray(optimizer),
+    )
+    print(f"Saved reconstruction: {path}")
+
+
+def replot(args):
+    """Redraw a dashboard from a --save-model archive."""
+    from types import SimpleNamespace
+    with np.load(args.replot) as saved:
+        array = SimpleNamespace(
+            x=saved["element_x"], y=saved["element_y"],
+            radius_m=float(saved["ring_radius_m"]),
+            center=tuple(saved["ring_center"]),
+        )
+        figure = dashboard(
+            args, saved["c_true"], saved["c_est"], {"misfit": saved["misfit"]},
+            saved["x_m"], saved["y_m"], array, saved["mask"], str(saved["optimizer"]),
+        )
+    figure_path = args.save_figure or args.replot.with_suffix(".png")
+    figure.savefig(figure_path, dpi=180)
+    print(f"Saved inversion dashboard: {figure_path}")
+    if not args.no_show:
+        plt.show(block=True)
+    plt.close(figure)
+
+
 def main():
     args = parse_args()
+    if args.replot is not None:
+        replot(args)
+        return
     if args.n_elements < 2:
         raise SystemExit("Need at least 2 ring elements.")
     validate_shot_count(args.n_elements, args.n_shots)
@@ -1093,18 +1158,15 @@ def main():
     figure_path = args.save_figure
     if args.no_show and figure_path is None:
         figure_path = Path("invert_ring_dashboard.png")
+    optimizer_name = (
+        args.optimizer if neural_model is None else f"neural-{args.optimizer}"
+    )
+    if args.save_model:
+        save_model(args.save_model, c_true, c_est, history, x_m, y_m, array, mask,
+                   optimizer_name)
     if not args.no_show or figure_path:
-        figure = plot_inversion(
-            c_true,
-            c_est,
-            history,
-            x_m,
-            y_m,
-            array,
-            mask=mask,
-            optimizer=(
-                args.optimizer if neural_model is None else f"neural-{args.optimizer}"
-            ),
+        figure = dashboard(
+            args, c_true, c_est, history, x_m, y_m, array, mask, optimizer_name,
         )
         if figure_path:
             figure_path.parent.mkdir(parents=True, exist_ok=True)

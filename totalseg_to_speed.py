@@ -267,7 +267,12 @@ def build_slice(subject_dir, z):
     return hu, labels, body, spacing_mm, structures
 
 
-def save_figure(path, hu, labels, speed, spacing_mm, title):
+# Speed colour window for figures: soft tissue spans ~1450-1580 m/s while bone
+# is 3750 m/s, so a linear full-range scale hides all soft-tissue contrast.
+DISPLAY_RANGE_M_S = (1420.0, 1620.0)
+
+
+def save_figure(path, hu, labels, speed, spacing_mm, title, speed_range=DISPLAY_RANGE_M_S):
     rows, cols = hu.shape
     extent = [0, cols * spacing_mm[1], rows * spacing_mm[0], 0]
     names = [name for name, _, _ in TISSUE_CLASSES]
@@ -280,9 +285,12 @@ def save_figure(path, hu, labels, speed, spacing_mm, title):
     bar = fig.colorbar(image, ax=axes[1], ticks=range(len(names)), fraction=0.046)
     bar.ax.set_yticklabels(names, fontsize=8)
     axes[1].set_title("Tissue classes (TotalSegmentator + HU)")
-    image = axes[2].imshow(speed, cmap="viridis", extent=extent)
-    fig.colorbar(image, ax=axes[2], label="m/s", fraction=0.046)
-    axes[2].set_title("Speed of sound")
+    low, high = speed_range
+    image = axes[2].imshow(speed, cmap="viridis", vmin=low, vmax=high, extent=extent)
+    extend = ("min" if speed.min() < low else "neither") if speed.max() <= high else \
+             ("both" if speed.min() < low else "max")
+    fig.colorbar(image, ax=axes[2], label="m/s", fraction=0.046, extend=extend)
+    axes[2].set_title(f"Speed of sound ({low:.0f}-{high:.0f} m/s window; bone saturates)")
     for axis in axes:
         axis.set(xlabel="mm", ylabel="mm")
     fig.suptitle(title)

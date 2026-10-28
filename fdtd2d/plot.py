@@ -154,8 +154,17 @@ def plot_inversion(
     array,
     mask=None,
     optimizer="cg",
+    c_range=None,
+    diff_range=None,
+    crop_m=None,
 ):
-    """True / reconstructed / difference sound speed and misfit history."""
+    """True / reconstructed / difference sound speed and misfit history.
+
+    ``c_range`` = (low, high) m/s and ``diff_range`` = a symmetric limit in
+    m/s clip the colour scales (values beyond saturate, marked by colour-bar
+    arrows), e.g. a soft-tissue window when bone would otherwise use up the
+    whole scale. ``crop_m`` limits the axes to +/- that half-width.
+    """
     optimizer_labels = {
         "cg": ("adjoint Polak–Ribière CG", "CG iteration"),
         "gradient-descent": (
@@ -174,14 +183,16 @@ def plot_inversion(
         (str(optimizer).replace("-", " "), "Optimization iteration"),
     )
     extent = _extent_mm(x_m, y_m)
-    vmin = float(min(np.min(c_true), np.min(c_est)))
-    vmax = float(max(np.max(c_true), np.max(c_est)))
+    data_min = float(min(np.min(c_true), np.min(c_est)))
+    data_max = float(max(np.max(c_true), np.max(c_est)))
+    vmin, vmax = (data_min, data_max) if c_range is None else map(float, c_range)
     diff = c_est - c_true
     if mask is not None:
         shown = np.array(diff, copy=True)
         shown[~mask] = 0.0
         diff = shown
-    vabs = max(float(np.max(np.abs(diff))), 1e-12)
+    diff_max = max(float(np.max(np.abs(diff))), 1e-12)
+    vabs = diff_max if diff_range is None else float(diff_range)
     misfit = np.asarray(history["misfit"], dtype=float)
 
     fig, axes = plt.subplots(2, 2, figsize=(12.0, 10.0))
@@ -202,7 +213,13 @@ def plot_inversion(
         )
         _overlay_geometry(ax, array, tx=None, x_m=x_m, y_m=y_m)
         ax.set(title=title, xlabel="x (mm)", ylabel="y (mm)")
-        fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
+        if crop_m is not None:
+            ax.set(xlim=(-1e3 * crop_m, 1e3 * crop_m), ylim=(-1e3 * crop_m, 1e3 * crop_m))
+        low_cut = float(np.min(data)) < lo
+        high_cut = float(np.max(data)) > hi
+        extend = {(False, False): "neither", (True, False): "min",
+                  (False, True): "max", (True, True): "both"}[(low_cut, high_cut)]
+        fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04, extend=extend)
         ax.legend(loc="upper right", fontsize=8)
 
     ax = axes[1, 1]
