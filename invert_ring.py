@@ -28,6 +28,7 @@ from fdtd2d.inversion import (
     m_from_c,
     polak_ribiere,
     tikhonov,
+    total_variation,
 )
 from fdtd2d.inversion.neural import (
     NeuralFWIObjective,
@@ -253,6 +254,20 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--tv", type=float, nargs="+", default=[0.0], metavar="ALPHA",
+        help=(
+            "Total-variation weight on interior m (default: 0). Preserves sharp "
+            "edges such as bone boundaries. One value or one per stage."
+        ),
+    )
+    parser.add_argument(
+        "--tv-eps", type=float, default=1.0e-9, metavar="EPS",
+        help=(
+            "TV smoothing in slowness-squared units (default: 1e-9, about 2 m/s "
+            "at 1500 m/s); differences much larger than EPS are penalized linearly."
+        ),
+    )
+    parser.add_argument(
         "--c-min", type=float, default=1400.0, metavar="M/S",
         help="Lower clip on reconstructed sound speed (default: 1400)",
     )
@@ -309,7 +324,17 @@ def parse_args():
     )
     parser.add_argument(
         "--save-model", type=Path, metavar="PATH",
-        help="Save true/reconstructed speed, mask, geometry and misfit to a .npz",
+        help=(
+            "Save true/reconstructed speed, mask, geometry and misfit to a .npz. "
+            "Multiscale runs also save each earlier stage as PATH_stageK.npz."
+        ),
+    )
+    parser.add_argument(
+        "--start-blurred-truth", type=float, metavar="SIGMA_MM",
+        help=(
+            "Diagnostic: start the first stage from the true slowness blurred by "
+            "a Gaussian of this standard deviation (mm) instead of uniform water."
+        ),
     )
     parser.add_argument(
         "--replot", type=Path, metavar="PATH",
@@ -461,6 +486,8 @@ class TorchLeastSquaresFWI:
         observed,
         mask,
         alpha=0.0,
+        tv=0.0,
+        tv_eps=1.0e-9,
         c_min=1400.0,
         c_max=2000.0,
         c_background=1500.0,
@@ -512,6 +539,8 @@ class TorchLeastSquaresFWI:
         self.source_history = []
         self.mask = np.asarray(mask, dtype=bool)
         self.alpha = float(alpha)
+        self.tv = float(tv)
+        self.tv_eps = float(tv_eps)
         self.c_min = float(c_min)
         self.c_max = float(c_max)
         self.c_background = float(c_background)
@@ -591,7 +620,7 @@ class TorchLeastSquaresFWI:
             ]
             residual = self._residual_batch(predicted, observed, shot_batch)
             value = value + 0.5 * torch.sum(residual.square())
-        regularization, _ = tikhonov(m, self.mask, self.alpha)
+        regularization, _ = self.regularization(m)
         return float(value) + regularization
 
     def misfit_and_grad(self, m):
@@ -616,11 +645,17 @@ class TorchLeastSquaresFWI:
             g_c2 = self._adjoint_accumulate_batch(batched, wave, residual, g_c2)
             del wave
         value = float(value)
-        regularization, g_regularization = tikhonov(m, self.mask, self.alpha)
+        regularization, g_regularization = self.regularization(m)
         gradient = -g_c2.detach().cpu().numpy().astype(float) / (m * m)
         gradient += g_regularization
         gradient[~self.mask] = 0.0
         return value + regularization, gradient
+
+    def regularization(self, m):
+        """Tikhonov plus total-variation penalty on m, and its gradient."""
+        value, gradient = tikhonov(m, self.mask, self.alpha)
+        tv_value, tv_gradient = total_variation(m, self.mask, self.tv, self.tv_eps)
+        return value + tv_value, gradient + tv_gradient
 
     def _adjoint_accumulate(self, wave, residual, g_c2):
         self.solver.reset()
@@ -949,6 +984,7 @@ def print_summary(
                 + ("" if report.get("adam_lr") is None
                    else f", Adam lr {report['adam_lr']:.3g}")
                 + f", reg {report['reg']:.3g}"
+                + ("" if not report.get("tv") else f", TV {report['tv']:.3g}")
             )
             print(
                 f"       observed data {report['observed_s']:.3f} s; "
@@ -1008,7 +1044,7 @@ def resize_slowness(m, shape):
 def run_inversion_stage(
     args, device, dtype, compile_step, grid_size, spacing, f_start, f_end,
     chirp_duration, initial_m=None, stage_index=1, neural_model=None,
-    n_elements=None, max_iter=None, adam_lr=None, reg=None,
+    n_elements=None, max_iter=None, adam_lr=None, reg=None, tv=None,
 ):
     """Generate data and invert one frequency/grid-continuation level.
 
@@ -1024,6 +1060,8 @@ def run_inversion_stage(
         adam_lr = args.adam_lr[0]
     if reg is None:
         reg = args.reg[0]
+    if tv is None:
+        tv = args.tv[0]
     ct_grid = None
     if args.ct_speed is not None:
         ct_grid = load_ct_ring_grid(
@@ -1100,7 +1138,7 @@ def run_inversion_stage(
     )
     problem = TorchLeastSquaresFWI(
         solver, sampler, array, pulse, n_steps, args.n_shots, observed, mask,
-        alpha=reg, c_min=args.c_min, c_max=args.c_max,
+        alpha=reg, tv=tv, tv_eps=args.tv_eps, c_min=args.c_min, c_max=args.c_max,
         c_background=background_speed,
         shot_seed=args.shot_seed, batched_solvers=batched_solvers,
         **batching_options(args),
@@ -1110,7 +1148,18 @@ def run_inversion_stage(
         f"wavefield every {problem.store_every} step(s) as "
         f"{str(problem.wave_dtype).removeprefix('torch.')}"
     )
-    if initial_m is None:
+    if initial_m is None and args.start_blurred_truth is not None:
+        from scipy.ndimage import gaussian_filter
+        sigma_px = 1.0e-3 * args.start_blurred_truth / spacing
+        m0 = gaussian_filter(m_from_c(c_true), sigma_px, mode="nearest")
+        m0[~mask] = m_from_c(background_speed)
+        m0 = problem.project(m0)
+        print(
+            f"  Starting model: true slowness blurred by σ = "
+            f"{args.start_blurred_truth:g} mm ({sigma_px:.1f} px); interior RMS c "
+            f"error {rms_c_error(c_from_m(m0), c_true, mask):.1f} m/s"
+        )
+    elif initial_m is None:
         m0 = np.full(c_true.shape, m_from_c(background_speed))
     else:
         m0 = problem.project(resize_slowness(initial_m, c_true.shape))
@@ -1158,6 +1207,7 @@ def run_inversion_stage(
         "f_end_khz": f_end / 1.0e3,
         "n_elements": n_elements,
         "reg": reg,
+        "tv": tv,
         "adam_lr": adam_lr if args.optimizer == "adam" and neural_model is None else None,
         "observed_s": observed_time_s,
         "optimization_s": optimization_time_s,
@@ -1221,6 +1271,10 @@ def main():
     validate_shot_count(min(args.n_elements), args.n_shots)
     if args.store_every < 1:
         raise SystemExit("--store-every must be at least 1.")
+    if args.start_blurred_truth is not None and args.start_blurred_truth <= 0.0:
+        raise SystemExit("--start-blurred-truth must be positive.")
+    if min(args.tv) < 0.0 or args.tv_eps <= 0.0:
+        raise SystemExit("--tv must be non-negative and --tv-eps positive.")
     if min(args.reg) < 0.0:
         raise SystemExit("--reg must be non-negative.")
     if not 0.0 < args.coarse_band[0] < args.coarse_band[1]:
@@ -1290,8 +1344,12 @@ def main():
         per_stage(args.max_iter, len(stages), "--max-iter"),
         per_stage(args.adam_lr, len(stages), "--adam-lr"),
         per_stage(args.reg, len(stages), "--reg"),
+        per_stage(args.tv, len(stages), "--tv"),
     )
-    for stage_index, (stage, n_elements, max_iter, adam_lr, reg) in enumerate(
+    optimizer_name = (
+        args.optimizer if neural_model is None else f"neural-{args.optimizer}"
+    )
+    for stage_index, (stage, n_elements, max_iter, adam_lr, reg, tv) in enumerate(
         stage_settings, start=1
     ):
         grid_size, spacing, f_start, f_end, duration = stage
@@ -1306,9 +1364,15 @@ def main():
             args, device, dtype, compile_step, grid_size, spacing, f_start,
             f_end, duration, initial_m=transferred_m, stage_index=stage_index,
             neural_model=neural_model, n_elements=n_elements,
-            max_iter=max_iter, adam_lr=adam_lr, reg=reg,
+            max_iter=max_iter, adam_lr=adam_lr, reg=reg, tv=tv,
         )
         stage_reports.append(stage_report)
+        if args.save_model and stage_index < len(stages):
+            stage_path = args.save_model.with_name(
+                f"{args.save_model.stem}_stage{stage_index}{args.save_model.suffix}"
+            )
+            save_model(stage_path, c_true, c_est, history, x_m, y_m, array, mask,
+                       optimizer_name)
     wall_time_s = time.perf_counter() - wall_time_start
     print_summary(
         c_true,
@@ -1340,9 +1404,6 @@ def main():
     figure_path = args.save_figure
     if args.no_show and figure_path is None:
         figure_path = Path("invert_ring_dashboard.png")
-    optimizer_name = (
-        args.optimizer if neural_model is None else f"neural-{args.optimizer}"
-    )
     if args.save_model:
         save_model(args.save_model, c_true, c_est, history, x_m, y_m, array, mask,
                    optimizer_name)

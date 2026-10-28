@@ -110,3 +110,23 @@ def test_auto_batch_size_splits_evenly_on_cpu():
 def test_auto_parallel_shots_option():
     problem, _ = ring_problem(parallel_shots="auto")
     assert problem.parallel_shots == 6  # CPU fallback of 16, capped at the shot count
+
+
+def test_total_variation_gradient_and_scaling():
+    from fdtd2d.inversion import total_variation
+
+    rng = np.random.default_rng(1)
+    mask = interior_mask(axis_centers(N, SPACING), axis_centers(N, SPACING), RADIUS, margin_m=0.0)
+    m = m_from_c(np.where(mask, 1500.0 + 100.0 * rng.standard_normal((N, N)), 1500.0))
+    eps = 1e-9
+    value, gradient = total_variation(m, mask, 1.0, eps)
+    direction = np.where(mask, rng.standard_normal((N, N)), 0.0) * 1e-9
+    step = 1e-3
+    plus, _ = total_variation(m + step * direction, mask, 1.0, eps)
+    minus, _ = total_variation(m - step * direction, mask, 1.0, eps)
+    finite_difference = (plus - minus) / (2 * step)
+    assert finite_difference == pytest.approx(np.sum(gradient * direction), rel=1e-6)
+    # A constant model costs nothing; outside the mask the gradient is zero.
+    assert total_variation(np.full((N, N), 4e-7), mask, 1.0, eps)[0] == pytest.approx(0.0, abs=1e-20)
+    assert np.all(gradient[~mask] == 0.0)
+    assert value > 0.0

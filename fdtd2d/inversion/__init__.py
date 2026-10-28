@@ -4,7 +4,7 @@ from .cg import masked_dot, polak_ribiere
 from .check import run_gradient_check
 from .gradient import LeastSquaresFWI, forward_store
 from .medium import c_from_m, clip_m, interior_mask, m_from_c
-from .misfit import tikhonov, waveform_misfit
+from .misfit import tikhonov, total_variation, waveform_misfit
 
 __all__ = [
     "LeastSquaresFWI",
@@ -17,5 +17,6 @@ __all__ = [
     "polak_ribiere",
     "run_gradient_check",
     "tikhonov",
+    "total_variation",
     "waveform_misfit",
 ]
