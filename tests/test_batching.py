@@ -130,3 +130,21 @@ def test_total_variation_gradient_and_scaling():
     assert total_variation(np.full((N, N), 4e-7), mask, 1.0, eps)[0] == pytest.approx(0.0, abs=1e-20)
     assert np.all(gradient[~mask] == 0.0)
     assert value > 0.0
+
+
+def test_stage_transfer_uses_physical_coordinates():
+    from invert_ring import resize_slowness
+
+    def disk_model(x_m, y_m):
+        x, y = np.meshgrid(x_m, y_m, indexing="xy")
+        return m_from_c(np.where(x**2 + (y - 0.03)**2 <= 0.02**2, 1600.0, 1480.0))
+
+    # Stage grids with different fields of view, as in the CT multiscale stages.
+    source = (axis_centers(201, 1.828e-3), axis_centers(201, 1.828e-3))
+    target = (axis_centers(401, 1.5e-3), axis_centers(401, 1.5e-3))
+    moved = resize_slowness(disk_model(*source), source, target, m_from_c(1480.0))
+    expected = disk_model(*target)
+    inside = np.abs(expected - moved) > 0.5 * abs(m_from_c(1600.0) - m_from_c(1480.0))
+    assert inside.mean() < 0.002  # only boundary pixels differ
+    # Outside the source field of view the background fills in.
+    assert moved[0, 0] == pytest.approx(m_from_c(1480.0))

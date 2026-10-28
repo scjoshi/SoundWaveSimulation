@@ -513,6 +513,7 @@ def print_summary(
 def run_inversion_stage(
     args, device, dtype, compile_step, grid_size, spacing, f_start, f_end,
     chirp_duration, initial_m=None, stage_index=1, neural_model=None,
+    initial_axes=None,
 ):
     """Generate limited-angle data and invert one frequency/grid level.
 
@@ -594,7 +595,9 @@ def run_inversion_stage(
     if initial_m is None:
         m0 = np.full(c_true.shape, m_from_c(background_speed))
     else:
-        m0 = problem.project(resize_slowness(initial_m, c_true.shape))
+        m0 = problem.project(resize_slowness(
+            initial_m, initial_axes, (x_m, y_m), m_from_c(background_speed),
+        ))
 
     visualizer = None
     if args.show_iterations:
@@ -722,6 +725,7 @@ def main():
             ) = run_inversion_stage(
                 args, device, dtype, compile_step, grid_size, spacing, f_start,
                 f_end, duration, initial_m=transferred_m, stage_index=stage_index,
+                initial_axes=None if transferred_m is None else (x_m, y_m),
                 neural_model=neural_model,
             )
         except ValueError as exc:

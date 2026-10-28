@@ -1047,19 +1047,34 @@ def multiscale_stages(enabled, coarse_band_hz=(25.0e3, 75.0e3)):
     return ((NX, DX, F_START_HZ, F_END_HZ, CHIRP_DURATION),)
 
 
-def resize_slowness(m, shape):
-    """Bicubically transfer slowness-squared to the next grid level."""
+def resize_slowness(m, source_axes, target_axes, background_m):
+    """Bicubically transfer slowness-squared to the next grid level.
+
+    Interpolates in physical coordinates: ``source_axes`` and ``target_axes``
+    are the (x_m, y_m) cell-centre axes of the two grids, which need not cover
+    the same field of view (CT stages do not). Target points outside the
+    source grid get ``background_m``.
+    """
+    source_x, source_y = (np.asarray(axis, dtype=float) for axis in source_axes)
+    target_x, target_y = (np.asarray(axis, dtype=float) for axis in target_axes)
+    u = 2.0 * (target_x - source_x[0]) / (source_x[-1] - source_x[0]) - 1.0
+    v = 2.0 * (target_y - source_y[0]) / (source_y[-1] - source_y[0]) - 1.0
+    grid_v, grid_u = np.meshgrid(v, u, indexing="ij")
+    grid = torch.as_tensor(np.stack([grid_u, grid_v], axis=-1))[None]
     field = torch.as_tensor(m, dtype=torch.float64)[None, None]
-    resized = torch.nn.functional.interpolate(
-        field, size=shape, mode="bicubic", align_corners=True
-    )
-    return resized[0, 0].numpy()
+    resized = torch.nn.functional.grid_sample(
+        field, grid, mode="bicubic", padding_mode="border", align_corners=True
+    )[0, 0].numpy()
+    outside = (np.abs(grid_u) > 1.0) | (np.abs(grid_v) > 1.0)
+    resized[outside] = background_m
+    return resized
 
 
 def run_inversion_stage(
     args, device, dtype, compile_step, grid_size, spacing, f_start, f_end,
     chirp_duration, initial_m=None, stage_index=1, neural_model=None,
     n_elements=None, max_iter=None, adam_lr=None, reg=None, tv=None,
+    initial_axes=None,
 ):
     """Generate data and invert one frequency/grid-continuation level.
 
@@ -1177,7 +1192,9 @@ def run_inversion_stage(
     elif initial_m is None:
         m0 = np.full(c_true.shape, m_from_c(background_speed))
     else:
-        m0 = problem.project(resize_slowness(initial_m, c_true.shape))
+        m0 = problem.project(resize_slowness(
+            initial_m, initial_axes, (x_m, y_m), m_from_c(background_speed),
+        ))
 
     visualizer = None
     if args.show_iterations:
@@ -1378,6 +1395,7 @@ def main():
         ) = run_inversion_stage(
             args, device, dtype, compile_step, grid_size, spacing, f_start,
             f_end, duration, initial_m=transferred_m, stage_index=stage_index,
+            initial_axes=None if transferred_m is None else (x_m, y_m),
             neural_model=neural_model, n_elements=n_elements,
             max_iter=max_iter, adam_lr=adam_lr, reg=reg, tv=tv,
         )
