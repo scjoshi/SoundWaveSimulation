@@ -246,8 +246,11 @@ def parse_args():
         ),
     )
     parser.add_argument(
-        "--reg", type=float, default=0.0, metavar="ALPHA",
-        help="Tikhonov weight on interior ∇m (default: 0)",
+        "--reg", type=float, nargs="+", default=[0.0], metavar="ALPHA",
+        help=(
+            "Tikhonov weight on interior ∇m (default: 0). One value for every "
+            "stage, or one per multiscale stage, e.g. 0 1e14 1e14."
+        ),
     )
     parser.add_argument(
         "--c-min", type=float, default=1400.0, metavar="M/S",
@@ -945,6 +948,7 @@ def print_summary(
                 f"{report['n_elements']} elements"
                 + ("" if report.get("adam_lr") is None
                    else f", Adam lr {report['adam_lr']:.3g}")
+                + f", reg {report['reg']:.3g}"
             )
             print(
                 f"       observed data {report['observed_s']:.3f} s; "
@@ -1004,7 +1008,7 @@ def resize_slowness(m, shape):
 def run_inversion_stage(
     args, device, dtype, compile_step, grid_size, spacing, f_start, f_end,
     chirp_duration, initial_m=None, stage_index=1, neural_model=None,
-    n_elements=None, max_iter=None, adam_lr=None,
+    n_elements=None, max_iter=None, adam_lr=None, reg=None,
 ):
     """Generate data and invert one frequency/grid-continuation level.
 
@@ -1018,6 +1022,8 @@ def run_inversion_stage(
         max_iter = args.max_iter[0]
     if adam_lr is None:
         adam_lr = args.adam_lr[0]
+    if reg is None:
+        reg = args.reg[0]
     ct_grid = None
     if args.ct_speed is not None:
         ct_grid = load_ct_ring_grid(
@@ -1094,7 +1100,7 @@ def run_inversion_stage(
     )
     problem = TorchLeastSquaresFWI(
         solver, sampler, array, pulse, n_steps, args.n_shots, observed, mask,
-        alpha=args.reg, c_min=args.c_min, c_max=args.c_max,
+        alpha=reg, c_min=args.c_min, c_max=args.c_max,
         c_background=background_speed,
         shot_seed=args.shot_seed, batched_solvers=batched_solvers,
         **batching_options(args),
@@ -1151,6 +1157,7 @@ def run_inversion_stage(
         "f_start_khz": f_start / 1.0e3,
         "f_end_khz": f_end / 1.0e3,
         "n_elements": n_elements,
+        "reg": reg,
         "adam_lr": adam_lr if args.optimizer == "adam" and neural_model is None else None,
         "observed_s": observed_time_s,
         "optimization_s": optimization_time_s,
@@ -1214,6 +1221,8 @@ def main():
     validate_shot_count(min(args.n_elements), args.n_shots)
     if args.store_every < 1:
         raise SystemExit("--store-every must be at least 1.")
+    if min(args.reg) < 0.0:
+        raise SystemExit("--reg must be non-negative.")
     if not 0.0 < args.coarse_band[0] < args.coarse_band[1]:
         raise SystemExit("--coarse-band needs 0 < LOW < HIGH.")
     if args.ring_clearance_mm <= 0:
@@ -1280,8 +1289,9 @@ def main():
         per_stage(args.n_elements, len(stages), "--n-elements"),
         per_stage(args.max_iter, len(stages), "--max-iter"),
         per_stage(args.adam_lr, len(stages), "--adam-lr"),
+        per_stage(args.reg, len(stages), "--reg"),
     )
-    for stage_index, (stage, n_elements, max_iter, adam_lr) in enumerate(
+    for stage_index, (stage, n_elements, max_iter, adam_lr, reg) in enumerate(
         stage_settings, start=1
     ):
         grid_size, spacing, f_start, f_end, duration = stage
@@ -1296,7 +1306,7 @@ def main():
             args, device, dtype, compile_step, grid_size, spacing, f_start,
             f_end, duration, initial_m=transferred_m, stage_index=stage_index,
             neural_model=neural_model, n_elements=n_elements,
-            max_iter=max_iter, adam_lr=adam_lr,
+            max_iter=max_iter, adam_lr=adam_lr, reg=reg,
         )
         stage_reports.append(stage_report)
     wall_time_s = time.perf_counter() - wall_time_start
