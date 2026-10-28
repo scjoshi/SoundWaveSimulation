@@ -193,8 +193,11 @@ def parse_args():
         help="Seed for random transmitter mini-batches (default: 0)",
     )
     parser.add_argument(
-        "--max-iter", type=int, default=15, metavar="K",
-        help="Optimization iterations (default: 15)",
+        "--max-iter", type=int, nargs="+", default=[15], metavar="K",
+        help=(
+            "Optimization iterations (default: 15). One value for every stage, "
+            "or one per multiscale stage, e.g. 150 50 50."
+        ),
     )
     parser.add_argument(
         "--optimizer",
@@ -234,9 +237,13 @@ def parse_args():
     parser.add_argument(
         "--adam-lr",
         type=float,
-        default=1.0e-9,
+        nargs="+",
+        default=[1.0e-9],
         metavar="ALPHA",
-        help="Adam learning rate in slowness-squared units (default: 1e-9)",
+        help=(
+            "Adam learning rate in slowness-squared units (default: 1e-9). One "
+            "value for every stage, or one per multiscale stage."
+        ),
     )
     parser.add_argument(
         "--reg", type=float, default=0.0, metavar="ALPHA",
@@ -936,6 +943,8 @@ def print_summary(
                 f"{report['grid_size']}, {report['spacing_mm']:.3g} mm, "
                 f"{report['f_start_khz']:.0f}–{report['f_end_khz']:.0f} kHz, "
                 f"{report['n_elements']} elements"
+                + ("" if report.get("adam_lr") is None
+                   else f", Adam lr {report['adam_lr']:.3g}")
             )
             print(
                 f"       observed data {report['observed_s']:.3f} s; "
@@ -960,16 +969,16 @@ def print_summary(
               f"c = {C0:.0f}–{C0 + SHEPP_DC:.0f} m/s")
 
 
-def stage_element_counts(n_elements, n_stages):
-    """Ring element count for each stage from one value or one per stage."""
-    if len(n_elements) == 1:
-        return list(n_elements) * n_stages
-    if len(n_elements) != n_stages:
+def per_stage(values, n_stages, option):
+    """Expand an option given once or once per stage to one value per stage."""
+    if len(values) == 1:
+        return list(values) * n_stages
+    if len(values) != n_stages:
         raise SystemExit(
-            f"--n-elements needs 1 or {n_stages} values for {n_stages} stage(s); "
-            f"got {len(n_elements)}."
+            f"{option} needs 1 or {n_stages} values for {n_stages} stage(s); "
+            f"got {len(values)}."
         )
-    return list(n_elements)
+    return list(values)
 
 
 def multiscale_stages(enabled, coarse_band_hz=(25.0e3, 75.0e3)):
@@ -995,7 +1004,7 @@ def resize_slowness(m, shape):
 def run_inversion_stage(
     args, device, dtype, compile_step, grid_size, spacing, f_start, f_end,
     chirp_duration, initial_m=None, stage_index=1, neural_model=None,
-    n_elements=None,
+    n_elements=None, max_iter=None, adam_lr=None,
 ):
     """Generate data and invert one frequency/grid-continuation level.
 
@@ -1005,6 +1014,10 @@ def run_inversion_stage(
     stage_start = time.perf_counter()
     if n_elements is None:
         n_elements = args.n_elements[0]
+    if max_iter is None:
+        max_iter = args.max_iter[0]
+    if adam_lr is None:
+        adam_lr = args.adam_lr[0]
     ct_grid = None
     if args.ct_speed is not None:
         ct_grid = load_ct_ring_grid(
@@ -1110,23 +1123,23 @@ def run_inversion_stage(
     if neural_model is not None:
         neural_model.set_grid(x_m, y_m, mask)
         m_est, history = optimize_neural(
-            NeuralFWIObjective(problem, neural_model), args.optimizer, args.max_iter,
+            NeuralFWIObjective(problem, neural_model), args.optimizer, max_iter,
             args.nn_lr, on_evaluate=None if visualizer is None else visualizer.update,
         )
     elif args.optimizer == "gradient-descent":
         m_est, history = fixed_step_gradient_descent(
             m0, evaluated_objective, problem.project, mask,
-            step_size=args.step_size, max_iter=args.max_iter, verbose=True,
+            step_size=args.step_size, max_iter=max_iter, verbose=True,
         )
     elif args.optimizer == "adam":
         m_est, history = adam(
             m0, evaluated_objective, problem.project, mask,
-            learning_rate=args.adam_lr, max_iter=args.max_iter, verbose=True,
+            learning_rate=adam_lr, max_iter=max_iter, verbose=True,
         )
     else:
         m_est, history = polak_ribiere(
             m0, problem.misfit, evaluated_objective, problem.project, mask,
-            max_iter=args.max_iter, verbose=True,
+            max_iter=max_iter, verbose=True,
         )
     if visualizer is not None:
         plt.close(visualizer.figure)
@@ -1138,6 +1151,7 @@ def run_inversion_stage(
         "f_start_khz": f_start / 1.0e3,
         "f_end_khz": f_end / 1.0e3,
         "n_elements": n_elements,
+        "adam_lr": adam_lr if args.optimizer == "adam" and neural_model is None else None,
         "observed_s": observed_time_s,
         "optimization_s": optimization_time_s,
         "total_s": time.perf_counter() - stage_start,
@@ -1210,11 +1224,11 @@ def main():
         raise SystemExit("--ct-edge-margin must be at least 3.")
     if args.multiscale and args.coarse_only:
         raise SystemExit("--multiscale and --coarse-only cannot be combined.")
-    if args.max_iter < 1:
+    if min(args.max_iter) < 1:
         raise SystemExit("--max-iter must be at least 1.")
     if args.step_size <= 0.0:
         raise SystemExit("--step-size must be positive.")
-    if args.adam_lr <= 0.0:
+    if min(args.adam_lr) <= 0.0:
         raise SystemExit("--adam-lr must be positive.")
     if args.c_min <= 0.0 or args.c_max <= args.c_min:
         raise SystemExit("Need 0 < --c-min < --c-max.")
@@ -1261,9 +1275,14 @@ def main():
     )
     if args.coarse_only:
         stages = stages[:1]
-    element_counts = stage_element_counts(args.n_elements, len(stages))
-    for stage_index, (stage, n_elements) in enumerate(
-        zip(stages, element_counts), start=1
+    stage_settings = zip(
+        stages,
+        per_stage(args.n_elements, len(stages), "--n-elements"),
+        per_stage(args.max_iter, len(stages), "--max-iter"),
+        per_stage(args.adam_lr, len(stages), "--adam-lr"),
+    )
+    for stage_index, (stage, n_elements, max_iter, adam_lr) in enumerate(
+        stage_settings, start=1
     ):
         grid_size, spacing, f_start, f_end, duration = stage
         print(
@@ -1277,6 +1296,7 @@ def main():
             args, device, dtype, compile_step, grid_size, spacing, f_start,
             f_end, duration, initial_m=transferred_m, stage_index=stage_index,
             neural_model=neural_model, n_elements=n_elements,
+            max_iter=max_iter, adam_lr=adam_lr,
         )
         stage_reports.append(stage_report)
     wall_time_s = time.perf_counter() - wall_time_start
@@ -1298,7 +1318,7 @@ def main():
         compile_step,
         args.optimizer,
         (args.nn_lr if neural_model is not None
-         else args.adam_lr if args.optimizer == "adam" else args.step_size),
+         else adam_lr if args.optimizer == "adam" else args.step_size),
         wall_time_s=wall_time_s,
         stage_reports=stage_reports,
         model_description=(
