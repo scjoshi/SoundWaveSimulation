@@ -27,7 +27,7 @@
 \title{Full-Waveform Inversion for Ring-Array Ultrasound:\\
 Algorithm, Simulation Setup, and Abdominal CT Results}
 \author{Sarang Joshi}
-\date{October 27, 2026}
+\date{\today}
 
 \begin{document}
 
@@ -36,12 +36,16 @@ Algorithm, Simulation Setup, and Abdominal CT Results}
 \begin{abstract}
 This note describes the time-domain full-waveform inversion (FWI) implemented in
 \code{invert\_ring.py}, which recovers a two-dimensional sound-speed map from
-ring-array ultrasound traces. Applied to a CT-derived abdomen
-(1478--3476~m/s) with three-stage frequency continuation, it recovers the organ
-and muscle anatomy and the vertebral cortex, but leaves the vertebral body about
-2000~m/s too slow because of cycle skipping in the bone. A logged coarse-stage
-rerun reduces the misfit $5.4\times$ in 71~s on CPU and already shows the bone
-failing while the soft tissue converges.
+ring-array ultrasound traces, and \code{totalseg\_to\_speed.py}, which builds
+abdominal sound-speed maps from an open, expert-segmented CT dataset and a
+table of tissue acoustic properties. On a TotalSegmentator abdomen
+(1450--3750~m/s, 128 elements, three frequency stages) the misfit falls in
+every stage, but the bone is not recovered: the vertebral body comes out
+hollow, the ribs are missing and false bone-speed patches appear, so the
+interior RMS error (314.7~m/s) ends slightly above that of the starting model
+(293.1~m/s). An earlier run on a threshold-based KiTS-00136 abdomen showed the
+same bone failure while recovering soft-tissue anatomy. Both point to cycle
+skipping in bone as the main obstacle.
 \end{abstract}
 
 \section{Forward model}
@@ -424,7 +428,75 @@ ring and arc problems.
 \section{Abdomen imaging results}
 \label{sec:results}
 
-%S1366-RESULTS%
+Three-stage FWI of the segmentation-based s1366 abdomen fits the data better
+at every stage, but the final model is no closer to the true speeds overall:
+its interior RMS error is 314.7~m/s, against 293.1~m/s for the uniform
+1480~m/s starting model. The bone, 1.6\% of the interior, drives this result.
+
+\subsection{Segmentation-based abdomen (TotalSegmentator s1366)}
+\label{sec:s1366}
+
+The run used the s1366 map of Section~\ref{sec:totalseg} and the setup of
+Table~\ref{tab:setup}:
+\begin{verbatim}
+python invert_ring.py --device cpu --ct-speed totalseg_s1366_acoustic.npz \
+  --multiscale --n-elements 128 --n-shots 4 --parallel-shots 2 \
+  --max-iter 50 --adam-lr 4e-9 --c-min 1400 --c-max 3900
+\end{verbatim}
+The full log is in \code{totalseg\_s1366\_multiscale\_log.txt}.
+
+\begin{table}[ht]
+\centering
+\small
+\caption{s1366 multiscale run, per stage (50 Adam iterations each; 8 CPU
+  threads, float32). $J$ is computed on the 4 random shots of each iteration,
+  so values are noisy and not comparable between stages.}
+\label{tab:s1366}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+Stage & $J$ at iteration 1 & $J$ at iteration 50 & Observed data (s) & Optimization (s) \\
+\midrule
+$101^2$, 4.00~mm, 25--75~kHz & $2.83\times10^{4}$ & $2.40\times10^{3}$ & 15 & 72 \\
+$201^2$, 1.83~mm, 50--125~kHz & $9.55\times10^{3}$ & $1.41\times10^{3}$ & 74 & 433 \\
+$401^2$, 1.50~mm, 100--250~kHz & $1.50\times10^{4}$ & $8.70\times10^{3}$ & 165 & 2660 \\
+\midrule
+Total wall time & \multicolumn{4}{r}{3419~s (57~min)} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[ht]
+  \centering
+  \includegraphics[width=\textwidth]{totalseg_s1366_multiscale.png}
+  \caption{Multiscale FWI of the s1366 abdomen. True $c$, reconstruction after
+    the $401^2$ / 100--250~kHz stage, difference, and the final-stage misfit.
+    The plot's $y$ axis runs anterior (bottom) to posterior (top).}
+  \label{fig:s1366}
+\end{figure}
+
+\begin{itemize}
+  \item \textbf{Bone.} The vertebral body is recovered as a ring: too fast at
+    its anterior rim (up to $+2000$~m/s) and still too slow inside (about
+    $-2000$~m/s). The thin ribs are not recovered (blue arcs in the
+    difference map).
+  \item \textbf{False bone-speed patches.} Three patches reach 2500--3500~m/s
+    in the posterior soft tissue near the spinous process and posterior ribs,
+    where the true speed is 1450--1580~m/s.
+  \item \textbf{Soft tissue.} Away from the bone the error is mostly within a
+    few hundred m/s, with ring-shaped streaks from the 128-element aperture;
+    organ boundaries are only faintly visible.
+  \item \textbf{Convergence.} $J$ falls $12\times$ and $7\times$ in the first
+    two stages but only $1.7\times$ in the last, where it stays noisy.
+  \item \textbf{RMS error.} 314.7~m/s, against 293.1~m/s for the starting
+    model. Without the bone pixels the starting model's error is only
+    53.3~m/s, so the bone errors and the false high-speed patches dominate the
+    final figure.
+\end{itemize}
+
+Compared with the KiTS-00136 run (Section~\ref{sec:kits}), the s1366 result
+has twice as many elements but a coarser final grid (1.5 versus 1.01~mm,
+3.9 points per wavelength). Faster bone (3750 versus 3476~m/s) and thin ribs
+make the cycle skipping worse.
 
 \subsection{Earlier experiment: KiTS-00136 with the HU-threshold model}
 \label{sec:kits}
@@ -528,21 +600,26 @@ abdomen setup.
   \item \textbf{Inverse crime.} Observed and predicted data come from the same
     solver on the same grid, with no noise. Results are optimistic; data should
     be generated on a finer grid, or with an independent solver, plus noise.
-  \item \textbf{Bone and cycle skipping.} The $2.35\times$ speed contrast of the
-    vertebra cycle-skips even at 25--75~kHz. Options: start below 25~kHz, add a
-    travel-time or envelope misfit for the first stage, or begin from a
-    bone-aware prior.
+  \item \textbf{Bone and cycle skipping.} The $2.5\times$ speed contrast of
+    bone cycle-skips even at 25--75~kHz and, in the s1366 run, leaves the final
+    RMS error above the starting model's. Options: start below 25~kHz, add a
+    travel-time or envelope misfit for the first stage, begin from a
+    bone-aware prior (the segmentation already marks the bone), or invert soft
+    tissue only with the bone held fixed.
   \item \textbf{Grid resolution.} The abdomen stages run at about 4--6 points
-    per shortest wavelength, low for a second-order scheme; numerical dispersion
-    is masked only because data and model share the grid.
+    per shortest wavelength (3.9 on the s1366 final stage, limited by the
+    1.5~mm CT voxels), low for a second-order scheme; numerical dispersion is
+    masked only because data and model share the grid.
   \item \textbf{Element count.} 64 elements on a 194~mm ring (19~mm pitch)
     undersample the wavefield at 100--250~kHz and produce radial streaks. More
     elements, or more shots per iteration, should reduce them.
   \item \textbf{Physics.} Constant density, no attenuation and no shear waves.
-    Bone and gas are only approximated by a scalar acoustic model.
-  \item \textbf{Reproducibility.} The full multiscale run's settings were not
-    logged; saving the command line and summary with each figure would close
-    this gap.
+    Bone and gas are only approximated by a scalar acoustic model. The
+    density and attenuation maps written by \code{totalseg\_to\_speed.py} are
+    not yet used by the solvers.
+  \item \textbf{Reproducibility.} The KiTS-00136 multiscale run's settings
+    were not logged; the s1366 run's command and log are saved alongside its
+    figure.
   \item \textbf{Memory.} Storing the full forward wavefield (about 3~GB per shot
     on the $401^2$ abdomen stage) caps the batch size; checkpointing would lift
     this.
@@ -556,6 +633,9 @@ abdomen setup.
     \code{invert\_ring.py}, \code{fdtd2d/torch\_backend.py},
     \code{fdtd2d/inversion/} (CG, misfit, medium), \code{fdtd2d/ct\_medium.py},
     \code{ct\_to\_speed.py}, \code{fdtd2d/inversion/neural.py}.
+  \item s1366 run: \code{totalseg\_s1366\_multiscale.png} and
+    \code{totalseg\_s1366\_multiscale\_log.txt}; converter
+    \code{totalseg\_to\_speed.py} and \code{abdominal\_acoustic\_parameters.csv}.
   \item Abdomen figure \code{abdomenmultiscale.png}, commit \code{2de3791}
     (September 26, 2026); CT map figure \code{abdomen\_acoustic.png}.
   \item CT slice: \code{ct-abdomen-c4kc-kits-instance.dcm}, C4KC-KiTS
