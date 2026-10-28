@@ -570,19 +570,57 @@ underestimated by up to about 2000~m/s.
     64 elements the pitch is about 19~mm, several wavelengths at
     100--250~kHz, so the source and receiver sampling is sparse at the finest
     stage.
-  \item \textbf{Convergence.} In the final stage $J$ falls from about
-    $5.9\times10^{3}$ to about $5.8\times10^{2}$ (roughly $10\times$, read from
-    the plot), with a rise after the first step and the noise expected from
-    random shot sub-sampling.
+  \item \textbf{Convergence.} In the final stage $J$ falls from
+    $5.81\times10^{3}$ to $5.78\times10^{2}$ ($10\times$), with a rise after
+    the first step and the noise expected from random shot sub-sampling.
 \end{itemize}
 
-The command line for this run was not saved. Its setup is inferred from the figure (ring radius, 64 plotted
-elements, 50 Adam iterations per stage) and the code defaults.
+The run was made on the RTX A6000 (desmond) on September 26, 2026, with
+\begin{verbatim}
+python invert_ring.py --device cuda --ct-speed abdomen_acoustic.npz \
+  --multiscale --c-max 3600 --n-elements 64 --n-shots 16 \
+  --parallel-shots 16 --adam-lr 5e-09 --max-iter 50 \
+  --no-show --save-figure abdomenmultiscale.png
+\end{verbatim}
+(recovered from the shell history on desmond; the original line also carried a
+superseded \code{-{}-save-figure abdomen\_inverse.png} and a repeated
+\code{-{}-no-show}). The output is in \code{abdomenmultiscale\_log.txt}, and
+the figure on desmond is byte-identical to the committed one. All other
+options took the defaults of that version of the code: no regularization,
+$c_{\min} = 1400$~m/s, shot seed 0, float32 with a compiled step. Like every
+batched run before commit \code{d519e92}, it kept each transmitter's own
+channel in the misfit. Table~\ref{tab:kits_run} lists the logged numbers.
+
+\begin{table}[ht]
+\centering
+\small
+\caption{KiTS-00136 multiscale run, from \code{abdomenmultiscale\_log.txt}.
+  $J$ at iteration 1 is after the first Adam update.}
+\label{tab:kits_run}
+\begin{tabular}{@{}llll@{}}
+\toprule
+Stage & Grid, spacing, band & $J$ at iteration 1 $\to$ 50 & Wall time \\
+\midrule
+1 & $101^2$, 4.63~mm, 25--75~kHz & $2.34\times10^{4} \to 6.33\times10^{3}$ & 88~s \\
+2 & $201^2$, 2.12~mm, 50--125~kHz & $9.28\times10^{3} \to 1.59\times10^{3}$ & 191~s \\
+3 & $401^2$, 1.01~mm, 100--250~kHz & $7.82\times10^{3} \to 5.78\times10^{2}$ & 432~s \\
+\midrule
+\multicolumn{4}{@{}l}{Elements 64; gradient shots 16 of 64 per iteration; Adam
+  learning rate $5\times10^{-9}$} \\
+\multicolumn{4}{@{}l}{Final stage: 4704 steps at $\Delta t = 89.6$~ns; total
+  wall time 711~s} \\
+\multicolumn{4}{@{}l}{Interior RMS error in $c$: 223.7~m/s; reconstructed range
+  1400--3600~m/s (true 1478--3476)} \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \subsubsection{Coarse-stage reproduction}
 
-To give logged numbers, the first stage was rerun on CPU on October 27, 2026
-with
+Before the multiscale log was recovered, the first stage was rerun on CPU on
+October 27, 2026 to inspect the coarse result on its own. This rerun used 4
+gradient shots and a learning rate of $4\times10^{-9}$ rather than the
+original 16 shots and $5\times10^{-9}$:
 \begin{verbatim}
 python invert_ring.py --ct-speed abdomen_acoustic.npz --coarse-only \
   --n-elements 64 --n-shots 4 --max-iter 50 --adam-lr 4e-9 \
@@ -654,9 +692,9 @@ abdomen setup.
     Bone and gas are only approximated by a scalar acoustic model. The
     density and attenuation maps written by \code{totalseg\_to\_speed.py} are
     not yet used by the solvers.
-  \item \textbf{Reproducibility.} The KiTS-00136 multiscale run's settings
-    were not logged; the s1366 run's command and log are saved alongside its
-    figure.
+  \item \textbf{Reproducibility.} The commands and logs of both abdomen
+    runs are saved alongside their figures. The KiTS-00136 command was
+    recovered after the fact from shell history.
   \item \textbf{Memory.} Storing the full forward wavefield (about 3~GB per shot
     on the $401^2$ abdomen stage) caps the batch size; checkpointing would lift
     this.
@@ -674,7 +712,8 @@ abdomen setup.
     \code{totalseg\_s1366\_multiscale\_log.txt}; converter
     \code{totalseg\_to\_speed.py} and \code{abdominal\_acoustic\_parameters.csv}.
   \item Abdomen figure \code{abdomenmultiscale.png}, commit \code{2de3791}
-    (September 26, 2026); CT map figure \code{abdomen\_acoustic.png}.
+    (September 26, 2026), and its log \code{abdomenmultiscale\_log.txt}; CT map
+    figure \code{abdomen\_acoustic.png}.
   \item CT slice: \code{ct-abdomen-c4kc-kits-instance.dcm}, C4KC-KiTS
     collection, The Cancer Imaging Archive.
   \item Coarse-stage reproduction: run on October 27, 2026; gradient check: run
