@@ -210,8 +210,18 @@ def parse_args():
         "--multiscale",
         action="store_true",
         help=(
-            "Use 25–75 kHz / 2 mm, 50–125 kHz / 1 mm, and "
-            "100–250 kHz / 0.5 mm coarse-to-fine stages."
+            "Use coarse-to-fine stages: 101 x 101 at 25–75 kHz (see "
+            "--coarse-band), 201 x 201 at 50–125 kHz, and optionally 401 x 401 "
+            "at 100–250 kHz (see --stages)."
+        ),
+    )
+    parser.add_argument(
+        "--stages", type=int, choices=(1, 2, 3), default=2, metavar="N",
+        help=(
+            "Number of multiscale stages to run (default: 2). The 201 x 201 "
+            "stage-2 model is the result. Stage 3 (401 x 401, 100–250 kHz) is "
+            "experimental: started from the stage-2 model it cycle-skips and "
+            "degrades the reconstruction."
         ),
     )
     parser.add_argument(
@@ -1009,10 +1019,15 @@ def print_summary(
               f"c = {C0:.0f}–{C0 + SHEPP_DC:.0f} m/s")
 
 
-def per_stage(values, n_stages, option):
-    """Expand an option given once or once per stage to one value per stage."""
+def per_stage(values, n_stages, option, n_ladder=None):
+    """Expand an option given once or once per stage to one value per stage.
+
+    Values for the full stage ladder (``n_ladder``) are cut to the stages run.
+    """
     if len(values) == 1:
         return list(values) * n_stages
+    if n_ladder is not None and len(values) == n_ladder:
+        return list(values)[:n_stages]
     if len(values) != n_stages:
         raise SystemExit(
             f"{option} needs 1 or {n_stages} values for {n_stages} stage(s); "
@@ -1336,15 +1351,15 @@ def main():
         args.multiscale or args.coarse_only,
         coarse_band_hz=tuple(1.0e3 * f for f in args.coarse_band),
     )
-    if args.coarse_only:
-        stages = stages[:1]
+    n_ladder = len(stages)
+    stages = stages[:1] if args.coarse_only else stages[:args.stages]
     stage_settings = zip(
         stages,
-        per_stage(args.n_elements, len(stages), "--n-elements"),
-        per_stage(args.max_iter, len(stages), "--max-iter"),
-        per_stage(args.adam_lr, len(stages), "--adam-lr"),
-        per_stage(args.reg, len(stages), "--reg"),
-        per_stage(args.tv, len(stages), "--tv"),
+        per_stage(args.n_elements, len(stages), "--n-elements", n_ladder),
+        per_stage(args.max_iter, len(stages), "--max-iter", n_ladder),
+        per_stage(args.adam_lr, len(stages), "--adam-lr", n_ladder),
+        per_stage(args.reg, len(stages), "--reg", n_ladder),
+        per_stage(args.tv, len(stages), "--tv", n_ladder),
     )
     optimizer_name = (
         args.optimizer if neural_model is None else f"neural-{args.optimizer}"
