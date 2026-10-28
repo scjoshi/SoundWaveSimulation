@@ -39,13 +39,13 @@ This note describes the time-domain full-waveform inversion (FWI) implemented in
 ring-array ultrasound traces, and \code{totalseg\_to\_speed.py}, which builds
 abdominal sound-speed maps from an open, expert-segmented CT dataset and a
 table of tissue acoustic properties. On a TotalSegmentator abdomen
-(1450--3750~m/s, 128 elements, three frequency stages) the misfit falls in
-every stage, but the bone is not recovered: the vertebral body comes out
-hollow, the ribs are missing and false bone-speed patches appear, so the
-interior RMS error (314.7~m/s) ends slightly above that of the starting model
-(293.1~m/s). An earlier run on a threshold-based KiTS-00136 abdomen showed the
-same bone failure while recovering soft-tissue anatomy. Both point to cycle
-skipping in bone as the main obstacle.
+(1450--3750~m/s, 128 elements, three frequency stages; 6~min on an RTX A6000)
+the misfit falls in every stage, but the result is worse than the starting
+model: the vertebral body comes out hollow, the ribs are missing, false
+bone-speed patches appear, and the soft-tissue RMS error grows from 53 to
+204~m/s, with only the liver and blood vessels improving. An earlier run on a
+threshold-based KiTS-00136 abdomen showed the same bone failure. Both point to
+cycle skipping in bone as the main obstacle.
 \end{abstract}
 
 \section{Forward model}
@@ -431,38 +431,45 @@ ring and arc problems.
 \label{sec:results}
 
 Three-stage FWI of the segmentation-based s1366 abdomen fits the data better
-at every stage, but the final model is no closer to the true speeds overall:
-its interior RMS error is 314.7~m/s, against 293.1~m/s for the uniform
-1480~m/s starting model. The bone, 1.6\% of the interior, drives this result.
+at every stage, but the final model is further from the true speeds than the
+uniform 1480~m/s starting model: interior RMS error 314.7 versus 293.1~m/s.
+Soft tissue degrades the most, from 53.3 to 203.8~m/s, while only the liver,
+blood vessels and, marginally, bone improve.
 
 \subsection{Segmentation-based abdomen (TotalSegmentator s1366)}
 \label{sec:s1366}
 
 The run used the s1366 map of Section~\ref{sec:totalseg} and the setup of
-Table~\ref{tab:setup}:
+Table~\ref{tab:setup}. It was run on an NVIDIA RTX A6000 (desmond):
 \begin{verbatim}
-python invert_ring.py --device cpu --ct-speed totalseg_s1366_acoustic.npz \
-  --multiscale --n-elements 128 --n-shots 4 --parallel-shots 2 \
-  --max-iter 50 --adam-lr 4e-9 --c-min 1400 --c-max 3900
+python invert_ring.py --device cuda --ct-speed totalseg_s1366_acoustic.npz \
+  --multiscale --n-elements 128 --n-shots 4 --max-iter 50 --adam-lr 4e-9 \
+  --c-min 1400 --c-max 3900 --save-model totalseg_s1366_model.npz \
+  --display-range 1420 1620 --display-diff 300 --crop-to-ring
 \end{verbatim}
-The full log is in \code{totalseg\_s1366\_multiscale\_log.txt}.
+The log is \code{totalseg\_s1366\_multiscale\_log.txt} and the reconstruction
+is saved in \code{totalseg\_s1366\_model.npz}, so the figure can be redrawn with
+\code{invert\_ring.py -{}-replot}. An identical CPU run (8 threads, 2 shots per
+batch) gave the same result: interior RMS error 314.710~m/s in both runs, and
+final misfits agreeing to $10^{-6}$.
 
 \begin{table}[ht]
 \centering
 \small
-\caption{s1366 multiscale run, per stage (50 Adam iterations each; 8 CPU
-  threads, float32). $J$ is computed on the 4 random shots of each iteration,
-  so values are noisy and not comparable between stages.}
+\caption{s1366 multiscale run per stage (50 Adam iterations each, float32).
+  $J$ is computed on the 4 random shots of each iteration, so values are noisy
+  and not comparable between stages. Times are stage totals including the
+  observed-data simulation.}
 \label{tab:s1366}
 \begin{tabular}{@{}lrrrr@{}}
 \toprule
-Stage & $J$ at iteration 1 & $J$ at iteration 50 & Observed data (s) & Optimization (s) \\
+Stage & $J$, iteration 1 & $J$, iteration 50 & CPU (s) & RTX A6000 (s) \\
 \midrule
-$101^2$, 4.00~mm, 25--75~kHz & $2.83\times10^{4}$ & $2.40\times10^{3}$ & 15 & 72 \\
-$201^2$, 1.83~mm, 50--125~kHz & $9.55\times10^{3}$ & $1.41\times10^{3}$ & 74 & 433 \\
-$401^2$, 1.50~mm, 100--250~kHz & $1.50\times10^{4}$ & $8.70\times10^{3}$ & 165 & 2660 \\
+$101^2$, 4.00~mm, 25--75~kHz & $2.83\times10^{4}$ & $2.40\times10^{3}$ & 87 & 84 \\
+$201^2$, 1.83~mm, 50--125~kHz & $9.55\times10^{3}$ & $1.41\times10^{3}$ & 507 & 133 \\
+$401^2$, 1.50~mm, 100--250~kHz & $1.50\times10^{4}$ & $8.70\times10^{3}$ & 2824 & 154 \\
 \midrule
-Total wall time & \multicolumn{4}{r}{3419~s (57~min)} \\
+Total & & & 3419 & 371 \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -470,35 +477,63 @@ Total wall time & \multicolumn{4}{r}{3419~s (57~min)} \\
 \begin{figure}[ht]
   \centering
   \includegraphics[width=\textwidth]{totalseg_s1366_multiscale.png}
-  \caption{Multiscale FWI of the s1366 abdomen. True $c$, reconstruction after
-    the $401^2$ / 100--250~kHz stage, difference, and the final-stage misfit.
-    The plot's $y$ axis runs anterior (bottom) to posterior (top).}
+  \caption{Multiscale FWI of the s1366 abdomen, cropped to the ring. True $c$
+    and reconstruction after the $401^2$ / 100--250~kHz stage in a
+    1420--1620~m/s window (bone saturates), difference clipped at
+    $\pm300$~m/s, and the final-stage misfit. The plot's $y$ axis runs
+    anterior (bottom) to posterior (top).}
   \label{fig:s1366}
 \end{figure}
 
+\begin{table}[ht]
+\centering
+\small
+\caption{Interior speed error by tissue for the s1366 run, computed from the
+  saved model on the $401^2$ grid. ``Start'' is the uniform 1480~m/s starting
+  model.}
+\label{tab:s1366_errors}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+Region & Pixels & Start RMS (m/s) & Final RMS (m/s) & Final bias (m/s) \\
+\midrule
+All interior & 38\,249 & 293.1 & 314.7 & $+28$ \\
+All soft tissue ($c < 2000$~m/s) & 37\,632 & 53.3 & 203.8 & $+58$ \\
+\quad Fat & 8\,480 & 30.0 & 292.7 & $+138$ \\
+\quad Soft-tissue average (other, bowel, pancreas) & 8\,628 & 60.0 & 264.0 & $+51$ \\
+\quad Muscle & 1\,146 & 100.0 & 138.6 & $-41$ \\
+\quad Spleen & 204 & 87.0 & 106.2 & $-28$ \\
+\quad Kidney & 552 & 80.0 & 97.0 & $-45$ \\
+\quad Liver & 5\,803 & 90.0 & 73.8 & $+3$ \\
+\quad Blood vessels & 519 & 95.0 & 73.1 & $+1$ \\
+\quad Coupling water (inside ring) & 12\,300 & 0.0 & 118.1 & $+52$ \\
+Bone & 617 & 2270.0 & 1899.1 & $-1785$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
 \begin{itemize}
-  \item \textbf{Bone.} The vertebral body is recovered as a ring: too fast at
-    its anterior rim (up to $+2000$~m/s) and still too slow inside (about
-    $-2000$~m/s). The thin ribs are not recovered (blue arcs in the
-    difference map).
-  \item \textbf{False bone-speed patches.} Three patches reach 2500--3500~m/s
-    in the posterior soft tissue near the spinous process and posterior ribs,
-    where the true speed is 1450--1580~m/s.
-  \item \textbf{Soft tissue.} Away from the bone the error is mostly within a
-    few hundred m/s, with ring-shaped streaks from the 128-element aperture;
-    organ boundaries are only faintly visible.
+  \item \textbf{Bone.} The vertebral body comes out as a ring: too fast at its
+    anterior rim and still about 2000~m/s too slow inside. The thin ribs are
+    not recovered.
+  \item \textbf{False bone-speed patches.} Patches above 1620~m/s (up to
+    2500--3500~m/s) appear in the posterior soft tissue near the spinous
+    process and posterior ribs, where the true speed is 1450--1580~m/s.
+  \item \textbf{Soft tissue.} The body and the surrounding water are covered
+    by speckle and streaks of $\pm100$--300~m/s, with a broad positive bias in
+    the fat and the anterior abdomen. Organ outlines are barely visible. Only
+    the liver (73.8~m/s) and blood vessels (73.1~m/s) end better than they
+    started (Table~\ref{tab:s1366_errors}).
   \item \textbf{Convergence.} $J$ falls $12\times$ and $7\times$ in the first
     two stages but only $1.7\times$ in the last, where it stays noisy.
-  \item \textbf{RMS error.} 314.7~m/s, against 293.1~m/s for the starting
-    model. Without the bone pixels the starting model's error is only
-    53.3~m/s, so the bone errors and the false high-speed patches dominate the
-    final figure.
 \end{itemize}
 
-Compared with the KiTS-00136 run (Section~\ref{sec:kits}), the s1366 result
-has twice as many elements but a coarser final grid (1.5 versus 1.01~mm,
-3.9 points per wavelength). Faster bone (3750 versus 3476~m/s) and thin ribs
-make the cycle skipping worse.
+The pattern fits cycle skipping in bone. Once the bone travel times are fitted
+a period off, the gradient pushes the soft tissue around the bone, and fat and
+water absorb compensating errors to explain the remaining phase. Compared with
+the KiTS-00136 run (Section~\ref{sec:kits}), s1366 has twice as many elements
+but a coarser final grid (1.5 versus 1.01~mm, 3.9 points per wavelength),
+faster bone (3750 versus 3476~m/s) and thin ribs, all of which make the
+problem harder.
 
 \subsection{Earlier experiment: KiTS-00136 with the HU-threshold model}
 \label{sec:kits}
