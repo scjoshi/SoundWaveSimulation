@@ -208,6 +208,15 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--coarse-band", type=float, nargs=2, default=(25.0, 75.0),
+        metavar=("LOW", "HIGH"),
+        help=(
+            "Chirp band in kHz of the first (coarse) multiscale stage "
+            "(default: 25 75). A lower start frequency widens the travel-time "
+            "error the inversion tolerates before cycle skipping."
+        ),
+    )
+    parser.add_argument(
         "--coarse-only",
         action="store_true",
         help="Run only the 25–75 kHz, 101 x 101 coarse multiscale stage.",
@@ -947,11 +956,11 @@ def print_summary(
               f"c = {C0:.0f}–{C0 + SHEPP_DC:.0f} m/s")
 
 
-def multiscale_stages(enabled):
+def multiscale_stages(enabled, coarse_band_hz=(25.0e3, 75.0e3)):
     """Return (grid size, spacing, start Hz, end Hz, chirp duration) stages."""
     if enabled:
         return (
-            (101, 2.0e-3, 25.0e3, 75.0e3, 80.0e-6),
+            (101, 2.0e-3, *coarse_band_hz, 80.0e-6),
             (201, 1.0e-3, 50.0e3, 125.0e3, 40.0e-6),
             (401, 0.5e-3, F_START_HZ, F_END_HZ, CHIRP_DURATION),
         )
@@ -1171,6 +1180,8 @@ def main():
     validate_shot_count(args.n_elements, args.n_shots)
     if args.store_every < 1:
         raise SystemExit("--store-every must be at least 1.")
+    if not 0.0 < args.coarse_band[0] < args.coarse_band[1]:
+        raise SystemExit("--coarse-band needs 0 < LOW < HIGH.")
     if args.ring_clearance_mm <= 0:
         raise SystemExit("--ring-clearance-mm must be positive.")
     if args.ct_padding_speed <= 0:
@@ -1224,7 +1235,10 @@ def main():
     wall_time_start = time.perf_counter()
     transferred_m = None
     stage_reports = []
-    stages = multiscale_stages(args.multiscale or args.coarse_only)
+    stages = multiscale_stages(
+        args.multiscale or args.coarse_only,
+        coarse_band_hz=tuple(1.0e3 * f for f in args.coarse_band),
+    )
     if args.coarse_only:
         stages = stages[:1]
     for stage_index, stage in enumerate(stages, start=1):
